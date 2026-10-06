@@ -21,7 +21,8 @@ function FormasModule.init(ENV)
     local tM="move"; local sR=CFrame.identity; local hR=false
     local cTO=false; local cBO=false; local cFM="strips"
     local bUC=false; local selColor=Color3.fromRGB(255,255,255)
-    local infB=false -- Infinity Blocks: bypasea el límite de inventario
+    local infB=false     -- Infinity Blocks: bypasea el límite de inventario
+    local infDelay=2     -- segundos que el bloque pasa lejos antes de volver
     local sBN="PlasticBlock"; local gbRunRef=ENV.gbRunning; local bS={running=false,cancel=false}
     local sBMat=Enum.Material.Plastic; local sBCol=Color3.fromRGB(163,162,165)
     local needsRecenter=false
@@ -599,11 +600,34 @@ function FormasModule.init(ENV)
             bInf.TextColor3=infB and BLACK or T.text
             bInf.Text=infB and "ON" or "OFF"
             infIcon.TextColor3=infB and WHITE or T.accent
-            infNote.Text=infB and "inventario → negativo OK" or "necesitas 1 bloque"
+            infNote.Text=infB and "→ lejos + vuelve" or "necesitas 1 bloque"
             infNote.TextColor3=infB and T.warn or T.sub
         end
         rfInf()
-        bInf.MouseButton1Click:Connect(function() infB=not infB; rfInf() end)
+        bInf.MouseButton1Click:Connect(function()
+            infB=not infB; rfInf()
+            refreshBuildRows() -- muestra/oculta la fila de delay
+        end)
+    end
+
+    -- Fila Delay (solo visible cuando infB está ON)
+    do
+        local rDelay=bRow(24, function() return infB end)
+        lbl(rDelay,"Delay (s)",UDim2.new(0,72,1,0),UDim2.new(0,0,0,0),T.sub)
+        local bl=btn(rDelay,"-",UDim2.new(0,24,0,22),UDim2.new(0,76,0.5,-11),T.btnAlt)
+        local dBox=box(rDelay,UDim2.new(1,-134,0,22),UDim2.new(0,104,0.5,-11),"2")
+        dBox.TextXAlignment=Enum.TextXAlignment.Center
+        local br=btn(rDelay,"+",UDim2.new(0,24,0,22),UDim2.new(1,-26,0.5,-11),T.btnAlt)
+        local function fmtD(v) return string.format("%.1f",math.max(0.1,v)) end
+        local function readD() return math.max(0.1,tonumber(dBox.Text) or 2) end
+        dBox:GetPropertyChangedSignal("Text"):Connect(function() infDelay=readD() end)
+        dBox.FocusLost:Connect(function() dBox.Text=fmtD(readD()) end)
+        bl.MouseButton1Click:Connect(function()
+            local v=math.max(0.1,readD()-0.5); infDelay=v; dBox.Text=fmtD(v)
+        end)
+        br.MouseButton1Click:Connect(function()
+            local v=readD()+0.5; infDelay=v; dBox.Text=fmtD(v)
+        end)
     end
     -- ─────────────────────────────────────────────────────────────────────────
 
@@ -858,30 +882,8 @@ function FormasModule.init(ENV)
             local placed=0; local pBl={}
             -- Infinity Blocks: guardar el valor original para reusarlo siempre
             local origVal=invItem.Value
-
-            -- Busca y activa todos los Weld/Snap/WeldConstraint dentro de un bloque
-            -- Patrón observado: blk.PPart.Weld  o  blk.PPart.Snap
-            local function activateWelds(blk)
-                -- 1) Ruta directa: PPart → buscar Weld o Snap
-                local ppart = blk:FindFirstChild("PPart")
-                if ppart then
-                    for _, c in ipairs(ppart:GetChildren()) do
-                        if c:IsA("Weld") or c:IsA("Snap") or c:IsA("WeldConstraint") then
-                            pcall(function()
-                                if not c.Enabled then c.Enabled = true end
-                            end)
-                        end
-                    end
-                end
-                -- 2) Barrido completo de todos los descendientes del bloque
-                for _, c in ipairs(blk:GetDescendants()) do
-                    if c:IsA("Weld") or c:IsA("Snap") or c:IsA("WeldConstraint") then
-                        pcall(function()
-                            if not c.Enabled then c.Enabled = true end
-                        end)
-                    end
-                end
-            end
+            -- Posición lejana que hace que el bloque "no cuente"
+            local FAR_CF=CFrame.new(-110.98773956298828, 85.9540023803711, 1488.80419921875)
 
             local function placeOne(seg)
                 -- Si infB está ON mandamos siempre el valor original al servidor
@@ -889,17 +891,27 @@ function FormasModule.init(ENV)
                 local ret=bRF:InvokeServer(sBN,countToSend,nil,seg.cframe,true,seg.cframe,false)
                 local blk
                 if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
-                if blk and sRF then pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end) end
-                -- TEORÍA WELD: activar Weld/Snap recién colocado para que el
-                -- servidor deje de "contar" ese bloque contra el inventario
-                if infB and blk then
-                    task.spawn(function()
-                        task.wait(0.05) -- esperar que el bloque termine de inicializar
-                        activateWelds(blk)
-                        -- segunda pasada con más delay por si tarda más en aparecer
-                        task.wait(0.2)
-                        activateWelds(blk)
-                    end)
+                if blk and sRF then
+                    if infB then
+                        -- TEORÍA DISTANCIA:
+                        -- 1) Escalar/posicionar normalmente
+                        pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end)
+                        -- 2) Mandar el bloque lejos en un hilo aparte para no frenar la build
+                        local snapSize=seg.size
+                        local snapCF=seg.cframe
+                        local snapDelay=infDelay  -- capturar valor actual
+                        task.spawn(function()
+                            task.wait(0.05)  -- dejar que inicialice
+                            -- mover lejos (mismo tamaño, nueva pos)
+                            pcall(function() sRF:InvokeServer(blk,snapSize,FAR_CF) end)
+                            -- esperar el tiempo configurado
+                            task.wait(snapDelay)
+                            -- volver a la posición original
+                            pcall(function() sRF:InvokeServer(blk,snapSize,snapCF) end)
+                        end)
+                    else
+                        pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end)
+                    end
                 end
                 return blk
             end
