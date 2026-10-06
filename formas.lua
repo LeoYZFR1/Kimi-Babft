@@ -858,14 +858,49 @@ function FormasModule.init(ENV)
             local placed=0; local pBl={}
             -- Infinity Blocks: guardar el valor original para reusarlo siempre
             local origVal=invItem.Value
+
+            -- Busca y activa todos los Weld/Snap/WeldConstraint dentro de un bloque
+            -- Patrón observado: blk.PPart.Weld  o  blk.PPart.Snap
+            local function activateWelds(blk)
+                -- 1) Ruta directa: PPart → buscar Weld o Snap
+                local ppart = blk:FindFirstChild("PPart")
+                if ppart then
+                    for _, c in ipairs(ppart:GetChildren()) do
+                        if c:IsA("Weld") or c:IsA("Snap") or c:IsA("WeldConstraint") then
+                            pcall(function()
+                                if not c.Enabled then c.Enabled = true end
+                            end)
+                        end
+                    end
+                end
+                -- 2) Barrido completo de todos los descendientes del bloque
+                for _, c in ipairs(blk:GetDescendants()) do
+                    if c:IsA("Weld") or c:IsA("Snap") or c:IsA("WeldConstraint") then
+                        pcall(function()
+                            if not c.Enabled then c.Enabled = true end
+                        end)
+                    end
+                end
+            end
+
             local function placeOne(seg)
-                -- Si infB está ON mandamos siempre el valor original al servidor,
-                -- así acepta la colocación aunque el inventario ya haya bajado a 0 o negativo
+                -- Si infB está ON mandamos siempre el valor original al servidor
                 local countToSend = infB and origVal or invItem.Value
                 local ret=bRF:InvokeServer(sBN,countToSend,nil,seg.cframe,true,seg.cframe,false)
                 local blk
                 if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
                 if blk and sRF then pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end) end
+                -- TEORÍA WELD: activar Weld/Snap recién colocado para que el
+                -- servidor deje de "contar" ese bloque contra el inventario
+                if infB and blk then
+                    task.spawn(function()
+                        task.wait(0.05) -- esperar que el bloque termine de inicializar
+                        activateWelds(blk)
+                        -- segunda pasada con más delay por si tarda más en aparecer
+                        task.wait(0.2)
+                        activateWelds(blk)
+                    end)
+                end
                 return blk
             end
             local WORKERS=sharing and 15 or 50; local nextIdx=1; local active=WORKERS
