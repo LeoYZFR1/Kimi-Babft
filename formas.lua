@@ -21,13 +21,13 @@ function FormasModule.init(ENV)
     local tM="move"; local sR=CFrame.identity; local hR=false
     local cTO=false; local cBO=false; local cFM="strips"
     local bUC=false; local selColor=Color3.fromRGB(255,255,255)
+    local infB=false -- Infinity Blocks: bypasea el límite de inventario
     local sBN="PlasticBlock"; local gbRunRef=ENV.gbRunning; local bS={running=false,cancel=false}
     local sBMat=Enum.Material.Plastic; local sBCol=Color3.fromRGB(163,162,165)
     local needsRecenter=false
     local DEF_IMG="rbxassetid://12328114032"
-    local baseCPos = nil -- Posición base en el suelo para calcular offsets
+    local baseCPos = nil
 
-    -- Definir colores para estados activos
     local WHITE = Color3.fromRGB(255, 255, 255)
     local BLACK = Color3.fromRGB(0, 0, 0)
 
@@ -61,7 +61,6 @@ function FormasModule.init(ENV)
 
     local gS,SHAPES
     do
-        -- Fuente 5x5 (c, z, f minúsculas corregidas)
         local FONT5x5 = {
             A="01110 10001 11111 10001 10001", B="11110 10001 11110 10001 11110", C="01110 10000 10000 10000 01110",
             D="11110 10001 10001 10001 11110", E="11111 10000 11110 10000 11111", F="11111 10000 11110 10000 10000",
@@ -73,10 +72,8 @@ function FormasModule.init(ENV)
             U="10001 10001 10001 10001 01110", V="10001 10001 10001 01010 00100", W="10001 10001 10101 11011 10001",
             X="10001 01010 00100 01010 10001", Y="10001 01010 00100 00100 00100", Z="11111 00010 00100 01000 11111",
             a="01110 00001 01111 10001 01111", b="10000 11110 10001 10001 11110",
-            -- c corregida: quitado pixel derecho superior (gancho de arriba)
             c="00000 01110 10000 10000 01110",
             d="00001 01111 10001 10001 01111", e="01110 10001 11111 10000 01110",
-            -- f corregida: agregado pixel derecho en fila superior (puntita azul)
             f="00110 01000 01110 01000 01000",
             g="01111 10001 01111 00001 01110", h="10000 11110 10001 10001 10001", i="00100 00000 01100 00100 01100",
             j="00010 00000 00010 10010 01100", k="10001 10010 11100 10010 10001", l="01100 00100 00100 00100 01100",
@@ -85,7 +82,6 @@ function FormasModule.init(ENV)
             r="00000 10110 11000 10000 10000", s="01111 10000 01110 00001 11110", t="00100 01110 00100 00100 00110",
             u="00000 10001 10001 10001 01111", v="00000 10001 10001 01010 00100", w="00000 10001 10101 10101 01010",
             x="10001 01010 00100 01010 10001", y="10001 10001 01111 00001 01110",
-            -- z corregida: diagonal más limpia sin patitas en las esquinas
             z="00000 11111 00100 01000 11111",
             ["0"]="01110 10001 10001 10001 01110", ["1"]="00100 01100 00100 00100 01110", ["2"]="01110 00001 01110 10000 11111",
             ["3"]="11110 00001 01110 00001 11110", ["4"]="10001 10001 11111 00001 00001", ["5"]="11111 10000 11110 00001 11110",
@@ -94,7 +90,6 @@ function FormasModule.init(ENV)
             ["?"]="01110 00001 00110 00000 00100", ["."]="00000 00000 00000 00000 00100", [","]="00000 00000 00000 00100 01000",
         }
 
-        -- Función para recortar los espacios vacíos a los lados de cada caracter
         local TRIMMED_FONT = {}
         for k, v in pairs(FONT5x5) do
             local rows = string.split(v, " ")
@@ -107,7 +102,7 @@ function FormasModule.init(ENV)
                     end
                 end
             end
-            if minC == 6 then minC = 1; maxC = 1 end -- Para el espacio
+            if minC == 6 then minC = 1; maxC = 1 end
             local newRows = {}
             for _, row in ipairs(rows) do
                 newRows[#newRows + 1] = row:sub(minC, maxC)
@@ -271,7 +266,6 @@ function FormasModule.init(ENV)
             {label="Corazon",icon="heart",kind="extrude",pts=heartPts,caps="both",fillable=true,useHeight=true,useCount=true,usePoint=false, yOffset=3},
             {label="Cubo",icon="cube",kind="cube3d",caps="both",fillable=false,useHeight=false,useCount=true,usePoint=false, yOffset=20},
             {label="Esfera",icon="sphere",kind="sphere3d",caps=false,fillable=false,useHeight=false,useCount=true,usePoint=false, yOffset=20},
-            -- CAMBIO 1: Pirámide sin fillable (quitada la opción de relleno de la UI)
             {label="Piramide",icon="pyramid",kind="pyramid",caps="bottom",fillable=false,useHeight=true,useCount=true,usePoint=true,pointy=true, yOffset=4},
             {label="Capsula",icon="capsule",kind="capsule",caps=false,fillable=false,useHeight=true,useCount=true,usePoint=true,pointy=true, yOffset=24},
             {label="Texto",icon="text",kind="text",caps=false,fillable=false,useHeight=false,useCount=false,usePoint=false, yOffset=2, rot=CFrame.Angles(0, math.rad(-90), 0)},
@@ -423,7 +417,6 @@ function FormasModule.init(ENV)
         local rTxt=bRow(24, function() local d=SHAPES[sS]; return d and d.kind=="text" end)
         lbl(rTxt, "Texto", UDim2.new(0,72,1,0), UDim2.new(0,0,0,0), T.sub)
 
-        -- CAMBIO 2: TextBox con ClipsDescendants y alineación izquierda para evitar desborde visual
         local txtContainer = mk("Frame", rTxt, {
             Size = UDim2.new(1,-80,0,24),
             Position = UDim2.new(0,76,0,0),
@@ -512,7 +505,6 @@ function FormasModule.init(ENV)
 
     do
         local rColorMat=bRow(28)
-        -- Hacer el círculo de color un TextButton para poder clickearlo
         local colBtnInd=mk("TextButton",rColorMat,{Size=UDim2.new(0,22,0,22),Position=UDim2.new(0,4,0.5,-11),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,Text="",AutoButtonColor=false})
         corner(colBtnInd,11); stroke(colBtnInd,T.text,1.5)
         local bOP=btn(rColorMat,"Elegir color",UDim2.new(0,80,0,24),UDim2.new(0,30,0.5,-12),T.btn)
@@ -577,6 +569,43 @@ function FormasModule.init(ENV)
             end
         end)
     end
+
+    -- ── Fila Infinity Blocks ──────────────────────────────────────────────────
+    do
+        local rInf=bRow(26)
+        -- Ícono ∞
+        local infIcon=mk("TextLabel",rInf,{
+            Size=UDim2.new(0,22,0,22),
+            Position=UDim2.new(0,4,0.5,-11),
+            BackgroundTransparency=1,
+            Text="∞",
+            TextColor3=T.accent,
+            Font=Enum.Font.GothamBold,
+            TextSize=16,
+        })
+        lbl(rInf,"Inf. Blocks",UDim2.new(0,72,1,0),UDim2.new(0,30,0,0),T.sub)
+        local bInf=btn(rInf,"OFF",UDim2.new(0,50,0,22),UDim2.new(0,106,0.5,-11),T.btnAlt)
+        local infNote=mk("TextLabel",rInf,{
+            Size=UDim2.new(1,-162,1,0),
+            Position=UDim2.new(0,162,0,0),
+            BackgroundTransparency=1,
+            Text="necesitas 1",
+            TextColor3=T.sub,
+            Font=Enum.Font.Gotham,
+            TextSize=9,
+        })
+        local function rfInf()
+            bInf.BackgroundColor3=infB and WHITE or T.btnAlt
+            bInf.TextColor3=infB and BLACK or T.text
+            bInf.Text=infB and "ON" or "OFF"
+            infIcon.TextColor3=infB and WHITE or T.accent
+            infNote.Text=infB and "inventario → negativo OK" or "necesitas 1 bloque"
+            infNote.TextColor3=infB and T.warn or T.sub
+        end
+        rfInf()
+        bInf.MouseButton1Click:Connect(function() infB=not infB; rfInf() end)
+    end
+    -- ─────────────────────────────────────────────────────────────────────────
 
     local PURPLE_GAMER=Color3.fromRGB(170,0,255)
     local Handles=mk("Handles",SG,{Adornee=cDummy,Style=Enum.HandlesStyle.Movement,Color3=PURPLE_GAMER,Visible=false})
@@ -776,7 +805,6 @@ function FormasModule.init(ENV)
         elseif def.caps=="bottom" then cTO=false; cBO=true
         else cTO=false; cBO=false end
 
-        -- CAMBIO 3: Si es pirámide, forzar relleno "strips" por defecto
         if def.kind=="pyramid" then
             cFM="strips"
             rfF()
@@ -828,8 +856,13 @@ function FormasModule.init(ENV)
             if not bRF then error("BuildingTool sin RF") end
             local folder=userFolder(LP.Name); hookFolder(folder)
             local placed=0; local pBl={}
+            -- Infinity Blocks: guardar el valor original para reusarlo siempre
+            local origVal=invItem.Value
             local function placeOne(seg)
-                local ret=bRF:InvokeServer(sBN,invItem.Value,nil,seg.cframe,true,seg.cframe,false)
+                -- Si infB está ON mandamos siempre el valor original al servidor,
+                -- así acepta la colocación aunque el inventario ya haya bajado a 0 o negativo
+                local countToSend = infB and origVal or invItem.Value
+                local ret=bRF:InvokeServer(sBN,countToSend,nil,seg.cframe,true,seg.cframe,false)
                 local blk
                 if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
                 if blk and sRF then pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end) end
@@ -839,7 +872,8 @@ function FormasModule.init(ENV)
             local function worker()
                 while true do
                     if bS.cancel then break end
-                    if invItem.Value<=0 then break end
+                    -- Infinity Blocks: si está ON, ignoramos el stock vacío
+                    if not infB and invItem.Value<=0 then break end
                     local i=nextIdx; nextIdx=nextIdx+1; if i>total then break end
                     if not folder or folder.Parent==nil then folder=userFolder(LP.Name); hookFolder(folder) end
                     local blk=placeOne(plan[i])
