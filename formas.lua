@@ -21,8 +21,7 @@ function FormasModule.init(ENV)
     local tM="move"; local sR=CFrame.identity; local hR=false
     local cTO=false; local cBO=false; local cFM="strips"
     local bUC=false; local selColor=Color3.fromRGB(255,255,255)
-    local infB=false     -- Infinity Blocks: bypasea el límite de inventario
-    local infDelay=2     -- segundos que el bloque pasa lejos antes de volver
+    local infB=false     -- Infinity Blocks: pool de bloques escalables
     local sBN="PlasticBlock"; local gbRunRef=ENV.gbRunning; local bS={running=false,cancel=false}
     local sBMat=Enum.Material.Plastic; local sBCol=Color3.fromRGB(163,162,165)
     local needsRecenter=false
@@ -610,25 +609,7 @@ function FormasModule.init(ENV)
         end)
     end
 
-    -- Fila Delay (solo visible cuando infB está ON)
-    do
-        local rDelay=bRow(24, function() return infB end)
-        lbl(rDelay,"Delay (s)",UDim2.new(0,72,1,0),UDim2.new(0,0,0,0),T.sub)
-        local bl=btn(rDelay,"-",UDim2.new(0,24,0,22),UDim2.new(0,76,0.5,-11),T.btnAlt)
-        local dBox=box(rDelay,UDim2.new(1,-134,0,22),UDim2.new(0,104,0.5,-11),"2")
-        dBox.TextXAlignment=Enum.TextXAlignment.Center
-        local br=btn(rDelay,"+",UDim2.new(0,24,0,22),UDim2.new(1,-26,0.5,-11),T.btnAlt)
-        local function fmtD(v) return string.format("%.1f",math.max(0.1,v)) end
-        local function readD() return math.max(0.1,tonumber(dBox.Text) or 2) end
-        dBox:GetPropertyChangedSignal("Text"):Connect(function() infDelay=readD() end)
-        dBox.FocusLost:Connect(function() dBox.Text=fmtD(readD()) end)
-        bl.MouseButton1Click:Connect(function()
-            local v=math.max(0.1,readD()-0.5); infDelay=v; dBox.Text=fmtD(v)
-        end)
-        br.MouseButton1Click:Connect(function()
-            local v=readD()+0.5; infDelay=v; dBox.Text=fmtD(v)
-        end)
-    end
+
     -- ─────────────────────────────────────────────────────────────────────────
 
     local PURPLE_GAMER=Color3.fromRGB(170,0,255)
