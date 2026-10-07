@@ -600,7 +600,7 @@ function FormasModule.init(ENV)
             bInf.TextColor3=infB and BLACK or T.text
             bInf.Text=infB and "ON" or "OFF"
             infIcon.TextColor3=infB and WHITE or T.accent
-            infNote.Text=infB and "→ lejos + vuelve" or "necesitas 1 bloque"
+            infNote.Text=infB and "pool 5 bloques escalables" or "solo bloques escalables"
             infNote.TextColor3=infB and T.warn or T.sub
         end
         rfInf()
@@ -868,7 +868,11 @@ function FormasModule.init(ENV)
         if not cP then setStat("selecciona un centro primero",T.danger); return end
         local sharing=isSharing(); local activeData=getActiveData()
         local invItem=activeData and activeData:FindFirstChild(sBN)
-        if not invItem or invItem.Value<=0 then setStat("material no valido / sin stock",T.danger); return end
+        local minRequired = infB and 5 or 1
+        if not invItem or invItem.Value < minRequired then
+            setStat(infB and "Infinity: necesitás 5+ bloques escalables" or "material no valido / sin stock", T.danger)
+            return
+        end
         local bTool=getActiveTool("BuildingTool"); if not bTool then setStat("falta BuildingTool",T.danger); return end
         local sTool=getActiveTool("ScalingTool"); local pTool=getActiveTool("PaintingTool")
         bS.running=true; bS.cancel=false; gbRunRef.value=true
