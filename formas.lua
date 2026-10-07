@@ -880,46 +880,91 @@ function FormasModule.init(ENV)
             if not bRF then error("BuildingTool sin RF") end
             local folder=userFolder(LP.Name); hookFolder(folder)
             local placed=0; local pBl={}
-            -- Infinity Blocks: guardar el valor original para reusarlo siempre
-            local origVal=invItem.Value
-            -- Posición lejana que hace que el bloque "no cuente"
-            local FAR_CF=CFrame.new(-110.98773956298828, 85.9540023803711, 1488.80419921875)
 
-            local function placeOne(seg)
-                -- Si infB está ON mandamos siempre el valor original al servidor
-                local countToSend = infB and origVal or invItem.Value
-                local ret=bRF:InvokeServer(sBN,countToSend,nil,seg.cframe,true,seg.cframe,false)
+            -- ── INFINITY BLOCKS (pool de bloques escalables) ──────────────
+            -- Mecanismo: coloca 5 bloques reales como "semillas" y luego
+            -- usa sRF para moverlos de posición en posición (reuso).
+            -- Solo funciona con bloques escalables y necesitas 5+.
+            local POOL_SIZE = 5
+            local pool = {}      -- instancias de bloques del pool
+            local poolReady = false
+
+            local function buildPool()
+                -- Posiciones de staging fuera del mapa donde esperan los bloques
+                local stagingY = -500
+                for i = 1, POOL_SIZE do
+                    if bS.cancel then break end
+                    local stageCF = CFrame.new(i * 8, stagingY, 0)
+                    local ret = bRF:InvokeServer(sBN, invItem.Value, nil, stageCF, true, stageCF, false)
+                    local blk
+                    if typeof(ret)=="Instance" and ret:IsA("BasePart") then
+                        blk = ret
+                    else
+                        blk = popBlock(3)
+                    end
+                    if blk and sRF then
+                        pcall(function() sRF:InvokeServer(blk, Vector3.new(4,4,4), stageCF) end)
+                    end
+                    if blk then pool[i] = blk end
+                    task.wait(0.05)
+                end
+                poolReady = (#pool >= 1)
+            end
+
+            local poolIdx = 0
+            local function nextPoolBlock()
+                poolIdx = (poolIdx % #pool) + 1
+                return pool[poolIdx]
+            end
+
+            -- Placement normal (sin infB)
+            local function placeNormal(seg)
+                local ret = bRF:InvokeServer(sBN, invItem.Value, nil, seg.cframe, true, seg.cframe, false)
                 local blk
                 if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
-                if blk and sRF then
-                    if infB then
-                        -- TEORÍA DISTANCIA:
-                        -- 1) Escalar/posicionar normalmente
-                        pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end)
-                        -- 2) Mandar el bloque lejos en un hilo aparte para no frenar la build
-                        local snapSize=seg.size
-                        local snapCF=seg.cframe
-                        local snapDelay=infDelay  -- capturar valor actual
-                        task.spawn(function()
-                            task.wait(0.05)  -- dejar que inicialice
-                            -- mover lejos (mismo tamaño, nueva pos)
-                            pcall(function() sRF:InvokeServer(blk,snapSize,FAR_CF) end)
-                            -- esperar el tiempo configurado
-                            task.wait(snapDelay)
-                            -- volver a la posición original
-                            pcall(function() sRF:InvokeServer(blk,snapSize,snapCF) end)
-                        end)
-                    else
-                        pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end)
-                    end
-                end
+                if blk and sRF then pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end) end
                 return blk
             end
-            local WORKERS=sharing and 15 or 50; local nextIdx=1; local active=WORKERS
+
+            -- Placement con infB: reutiliza un bloque del pool via sRF
+            local function placeInf(seg)
+                local blk = nextPoolBlock()
+                if not blk or not blk.Parent then
+                    -- pool block desapareció, hacer normal como fallback
+                    return placeNormal(seg)
+                end
+                -- Mover bloque del pool a la posición objetivo y escalar
+                pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end)
+                task.wait(0.02) -- pequeña pausa para que el servidor procese
+                return blk
+            end
+
+            -- Construir el pool antes de empezar (solo si infB está ON)
+            if infB and sRF then
+                setStat("Preparando pool de "..POOL_SIZE.." bloques...", T.warn)
+                buildPool()
+                if not poolReady then
+                    setStat("No se pudo crear el pool (¿tenés 5+ bloques escalables?)", T.danger)
+                    error("pool failed")
+                end
+                setStat("Pool listo ("..#pool.." bloques). Construyendo...", T.warn)
+            end
+
+            local function placeOne(seg)
+                if infB and poolReady then
+                    return placeInf(seg)
+                else
+                    return placeNormal(seg)
+                end
+            end
+            -- ─────────────────────────────────────────────────────────────
+
+            local WORKERS = sharing and 1 or (infB and 1 or 50)
+            -- infB usa 1 worker porque los bloques del pool se reusan secuencialmente
+            local nextIdx=1; local active=WORKERS
             local function worker()
                 while true do
                     if bS.cancel then break end
-                    -- Infinity Blocks: si está ON, ignoramos el stock vacío
                     if not infB and invItem.Value<=0 then break end
                     local i=nextIdx; nextIdx=nextIdx+1; if i>total then break end
                     if not folder or folder.Parent==nil then folder=userFolder(LP.Name); hookFolder(folder) end
