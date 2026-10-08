@@ -21,7 +21,6 @@ function FormasModule.init(ENV)
     local tM="move"; local sR=CFrame.identity; local hR=false
     local cTO=false; local cBO=false; local cFM="strips"
     local bUC=false; local selColor=Color3.fromRGB(255,255,255)
-    local infB=false     -- Infinity Blocks: pool de bloques escalables
     local sBN="PlasticBlock"; local gbRunRef=ENV.gbRunning; local bS={running=false,cancel=false}
     local sBMat=Enum.Material.Plastic; local sBCol=Color3.fromRGB(163,162,165)
     local needsRecenter=false
@@ -302,7 +301,7 @@ function FormasModule.init(ENV)
             elseif ic=="pyramid" then local tx,ty=cx2,cy2-R; local blx,bly=cx2-R,cy2+R*0.8; local brx,bry=cx2+R,cy2+R*0.8; dLine(container,tx,ty,blx,bly,col); dLine(container,tx,ty,brx,bry,col); dLine(container,blx,bly,brx,bry,col); dLine(container,tx,ty,cx2+R*0.35,bry,col)
             elseif ic=="capsule" then local st=mk("Frame",container,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(R*1.2,R*2),BackgroundTransparency=1}); corner(st,999); mk("UIStroke",st,{Color=col,Thickness=2,ApplyStrokeMode=Enum.ApplyStrokeMode.Border})
             elseif ic=="heart" then local scale=R*0.82; local pts={}; local N=32; for k2=0,N-1 do local t=(k2/N)*2*math.pi; local px=16*math.sin(t)^3; local py=-(13*math.cos(t)-5*math.cos(2*t)-2*math.cos(3*t)-math.cos(4*t)); pts[k2+1]={cx2+px*scale/17,cy2+py*scale/17} end; for i=1,N do local a2=pts[i]; local b2=pts[(i%N)+1]; dLine(container,a2[1],a2[2],b2[1],b2[2],col) end
-            elseif ic=="text" then 
+            elseif ic=="text" then
                 mk("TextLabel", container, {
                     Size = UDim2.new(1, 0, 1, 0),
                     BackgroundTransparency = 1,
@@ -416,7 +415,6 @@ function FormasModule.init(ENV)
     do
         local rTxt=bRow(24, function() local d=SHAPES[sS]; return d and d.kind=="text" end)
         lbl(rTxt, "Texto", UDim2.new(0,72,1,0), UDim2.new(0,0,0,0), T.sub)
-
         local txtContainer = mk("Frame", rTxt, {
             Size = UDim2.new(1,-80,0,24),
             Position = UDim2.new(0,76,0,0),
@@ -512,14 +510,14 @@ function FormasModule.init(ENV)
         local function refCB() bTC.BackgroundColor3=bUC and WHITE or T.btnAlt; bTC.TextColor3=bUC and BLACK or T.text; bTC.Text=bUC and "ON" or "OFF" end
         refCB()
         bTC.MouseButton1Click:Connect(function() bUC=not bUC; refCB(); mPv() end)
-        
+
         local function openColorPicker()
             openCP(selColor,function(col) selColor=col; colBtnInd.BackgroundColor3=col; bUC=true; refCB(); mPv() end,
             function(col) selColor=col; colBtnInd.BackgroundColor3=col; if bUC then mPv() end end)
         end
         bOP.MouseButton1Click:Connect(openColorPicker)
         colBtnInd.MouseButton1Click:Connect(openColorPicker)
-        
+
         matPickBtn=mk("TextButton",rColorMat,{Size=UDim2.new(1,-160,0,24),Position=UDim2.new(0,156,0.5,-12),BackgroundColor3=T.input,BorderSizePixel=0,Font=Enum.Font.GothamSemibold,TextSize=10,Text="",TextColor3=T.text,TextXAlignment=Enum.TextXAlignment.Left})
         corner(matPickBtn,6)
         mIconRef=mk("ImageLabel",matPickBtn,{Size=UDim2.new(0,20,0,20),Position=UDim2.new(0,4,0.5,-10),BackgroundTransparency=1,BorderSizePixel=0})
@@ -570,48 +568,6 @@ function FormasModule.init(ENV)
         end)
     end
 
-    -- ── Fila Infinity Blocks ──────────────────────────────────────────────────
-    do
-        local rInf=bRow(26)
-        -- Ícono ∞
-        local infIcon=mk("TextLabel",rInf,{
-            Size=UDim2.new(0,22,0,22),
-            Position=UDim2.new(0,4,0.5,-11),
-            BackgroundTransparency=1,
-            Text="∞",
-            TextColor3=T.accent,
-            Font=Enum.Font.GothamBold,
-            TextSize=16,
-        })
-        lbl(rInf,"Inf. Blocks",UDim2.new(0,72,1,0),UDim2.new(0,30,0,0),T.sub)
-        local bInf=btn(rInf,"OFF",UDim2.new(0,50,0,22),UDim2.new(0,106,0.5,-11),T.btnAlt)
-        local infNote=mk("TextLabel",rInf,{
-            Size=UDim2.new(1,-162,1,0),
-            Position=UDim2.new(0,162,0,0),
-            BackgroundTransparency=1,
-            Text="necesitas 1",
-            TextColor3=T.sub,
-            Font=Enum.Font.Gotham,
-            TextSize=9,
-        })
-        local function rfInf()
-            bInf.BackgroundColor3=infB and WHITE or T.btnAlt
-            bInf.TextColor3=infB and BLACK or T.text
-            bInf.Text=infB and "ON" or "OFF"
-            infIcon.TextColor3=infB and WHITE or T.accent
-            infNote.Text=infB and "pool 5 bloques escalables" or "solo bloques escalables"
-            infNote.TextColor3=infB and T.warn or T.sub
-        end
-        rfInf()
-        bInf.MouseButton1Click:Connect(function()
-            infB=not infB; rfInf()
-            refreshBuildRows() -- muestra/oculta la fila de delay
-        end)
-    end
-
-
-    -- ─────────────────────────────────────────────────────────────────────────
-
     local PURPLE_GAMER=Color3.fromRGB(170,0,255)
     local Handles=mk("Handles",SG,{Adornee=cDummy,Style=Enum.HandlesStyle.Movement,Color3=PURPLE_GAMER,Visible=false})
     pcall(function() Handles.AlwaysOnTop=true end)
@@ -657,7 +613,7 @@ function FormasModule.init(ENV)
 
     local function centerOnCZ()
         local z=closestZone(myRefPos())
-        if z then 
+        if z then
             baseCPos = getZoneSurface(z)
             local def = SHAPES[sS]
             local yOff = def and def.yOffset or 0
@@ -666,7 +622,7 @@ function FormasModule.init(ENV)
             hR = sR ~= CFrame.identity
             cDummy.CFrame=CFrame.new(cP)*sR
             ArcAdornee.CFrame=CFrame.new(cP)*sR
-            updateHandles(); mPv(); return true 
+            updateHandles(); mPv(); return true
         end
         return false
     end
@@ -740,7 +696,7 @@ function FormasModule.init(ENV)
 
     do
         local drag2,savedCam,origDP,origBaseCPos=false,nil,nil,nil
-        Handles.MouseButton1Down:Connect(function() 
+        Handles.MouseButton1Down:Connect(function()
             if not PB.Visible or lk or not cP then return end
             drag2=true
             origDP=cDummy.Position
@@ -759,7 +715,7 @@ function FormasModule.init(ENV)
             mPv()
         end)
         Handles.MouseButton1Up:Connect(function() if not PB.Visible then return end; drag2=false; savedCam=nil; Camera.CameraType=Enum.CameraType.Custom end)
-        
+
         local arcDrag,arcStartRot,arcSavedCam=false,nil,nil; local activeArcAxis=nil
         Arc.MouseButton1Down:Connect(function() if lk or not cP then return end; arcDrag=true; arcStartRot=sR; arcSavedCam=Camera.CFrame; Camera.CameraType=Enum.CameraType.Scriptable end)
         Arc.MouseDrag:Connect(function(axis,relAngle) if not arcDrag then return end; if activeArcAxis~=axis then activeArcAxis=axis end; local av=(axis==Enum.Axis.X and Vector3.xAxis)or(axis==Enum.Axis.Y and Vector3.yAxis)or Vector3.zAxis; local st=stepVal(rotStepBox); local snapped=(st>0)and math.rad(math.floor(math.deg(relAngle)/st+0.5)*st)or relAngle; sR=arcStartRot*CFrame.fromAxisAngle(av,snapped); hR=true; if cP then cDummy.CFrame=CFrame.new(cP)*sR end; mPv() end)
@@ -814,10 +770,10 @@ function FormasModule.init(ENV)
             cFM="strips"
             rfF()
         end
-        
+
         sR = def.rot or CFrame.identity
         hR = sR ~= CFrame.identity
-        
+
         if baseCPos then
             cP = baseCPos + Vector3.new(0, def.yOffset or 0)
             cDummy.CFrame=CFrame.new(cP)*sR
@@ -849,11 +805,7 @@ function FormasModule.init(ENV)
         if not cP then setStat("selecciona un centro primero",T.danger); return end
         local sharing=isSharing(); local activeData=getActiveData()
         local invItem=activeData and activeData:FindFirstChild(sBN)
-        local minRequired = infB and 5 or 1
-        if not invItem or invItem.Value < minRequired then
-            setStat(infB and "Infinity: necesitás 5+ bloques escalables" or "material no valido / sin stock", T.danger)
-            return
-        end
+        if not invItem or invItem.Value<=0 then setStat("material no valido / sin stock",T.danger); return end
         local bTool=getActiveTool("BuildingTool"); if not bTool then setStat("falta BuildingTool",T.danger); return end
         local sTool=getActiveTool("ScalingTool"); local pTool=getActiveTool("PaintingTool")
         bS.running=true; bS.cancel=false; gbRunRef.value=true
@@ -866,100 +818,43 @@ function FormasModule.init(ENV)
             local folder=userFolder(LP.Name); hookFolder(folder)
             local placed=0; local pBl={}
 
-            -- ── INFINITY BLOCKS (pool de bloques escalables) ──────────────
-            -- Mecanismo: coloca 5 bloques reales como "semillas" y luego
-            -- usa sRF para moverlos de posición en posición (reuso).
-            -- Solo funciona con bloques escalables y necesitas 5+.
-            local POOL_SIZE = 5
-            local pool = {}      -- instancias de bloques del pool
-            local poolReady = false
-
-            local function buildPool()
-                -- Posiciones de staging fuera del mapa donde esperan los bloques
-                local stagingY = -500
-                for i = 1, POOL_SIZE do
-                    if bS.cancel then break end
-                    local stageCF = CFrame.new(i * 8, stagingY, 0)
-                    local ret = bRF:InvokeServer(sBN, invItem.Value, nil, stageCF, true, stageCF, false)
-                    local blk
-                    if typeof(ret)=="Instance" and ret:IsA("BasePart") then
-                        blk = ret
-                    else
-                        blk = popBlock(3)
-                    end
-                    if blk and sRF then
-                        pcall(function() sRF:InvokeServer(blk, Vector3.new(4,4,4), stageCF) end)
-                    end
-                    if blk then pool[i] = blk end
-                    task.wait(0.05)
-                end
-                poolReady = (#pool >= 1)
+            -- ── Rate-limiter: 255 bloques/segundo ──────────────────────────
+            local TARGET_BPS  = 255
+            local nextSlot    = tick()
+            local function waitForSlot()
+                local now = tick()
+                if now < nextSlot then task.wait(nextSlot - now) end
+                nextSlot = math.max(nextSlot, tick()) + 1 / TARGET_BPS
             end
-
-            local poolIdx = 0
-            local function nextPoolBlock()
-                poolIdx = (poolIdx % #pool) + 1
-                return pool[poolIdx]
-            end
-
-            -- Placement normal (sin infB)
-            local function placeNormal(seg)
-                local ret = bRF:InvokeServer(sBN, invItem.Value, nil, seg.cframe, true, seg.cframe, false)
-                local blk
-                if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
-                if blk and sRF then pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end) end
-                return blk
-            end
-
-            -- Placement con infB: reutiliza un bloque del pool via sRF
-            local function placeInf(seg)
-                local blk = nextPoolBlock()
-                if not blk or not blk.Parent then
-                    -- pool block desapareció, hacer normal como fallback
-                    return placeNormal(seg)
-                end
-                -- Mover bloque del pool a la posición objetivo y escalar
-                pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end)
-                task.wait(0.02) -- pequeña pausa para que el servidor procese
-                return blk
-            end
-
-            -- Construir el pool antes de empezar (solo si infB está ON)
-            if infB and sRF then
-                setStat("Preparando pool de "..POOL_SIZE.." bloques...", T.warn)
-                buildPool()
-                if not poolReady then
-                    setStat("No se pudo crear el pool (¿tenés 5+ bloques escalables?)", T.danger)
-                    error("pool failed")
-                end
-                setStat("Pool listo ("..#pool.." bloques). Construyendo...", T.warn)
-            end
+            -- ───────────────────────────────────────────────────────────────
 
             local function placeOne(seg)
-                if infB and poolReady then
-                    return placeInf(seg)
-                else
-                    return placeNormal(seg)
-                end
+                local ret=bRF:InvokeServer(sBN,invItem.Value,nil,seg.cframe,true,seg.cframe,false)
+                local blk
+                if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
+                if blk and sRF then pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end) end
+                return blk
             end
-            -- ─────────────────────────────────────────────────────────────
 
-            local WORKERS = sharing and 1 or (infB and 1 or 50)
-            -- infB usa 1 worker porque los bloques del pool se reusan secuencialmente
-            local nextIdx=1; local active=WORKERS
+            local WORKERS = sharing and 50 or 255
+            local nextIdx = 1; local active = WORKERS
+
             local function worker()
                 while true do
                     if bS.cancel then break end
-                    if not infB and invItem.Value<=0 then break end
+                    if invItem.Value<=0 then break end
                     local i=nextIdx; nextIdx=nextIdx+1; if i>total then break end
                     if not folder or folder.Parent==nil then folder=userFolder(LP.Name); hookFolder(folder) end
+                    waitForSlot()                   -- espera el slot de 1/255 s
                     local blk=placeOne(plan[i])
                     if blk then placed=placed+1; pBl[#pBl+1]=blk end
                 end
                 active=active-1
             end
+
             for _=1,WORKERS do task.spawn(worker) end
-            while active>0 do setStat(("Construyendo %d/%d"):format(placed,total),T.warn); task.wait(0.03) end
+            while active>0 do setStat(("Construyendo %d/%d"):format(placed,total),T.warn); task.wait(0) end
+
             if blockConn then blockConn:Disconnect(); blockConn=nil end
             if bUC and pRF and #pBl>0 and not bS.cancel then
                 setStat(("Pintando %d bloques..."):format(#pBl),T.warn)
@@ -977,6 +872,7 @@ function FormasModule.init(ENV)
         setLocked(false)
         if pOn then mPv() end
     end
+
     BB.MouseButton1Click:Connect(function()
         if bS.running then bS.cancel=true; setStat("cancelando...",T.danger); return end
         task.spawn(iniciarConstruccion)
