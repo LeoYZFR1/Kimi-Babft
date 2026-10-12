@@ -805,107 +805,47 @@ function FormasModule.init(ENV)
         if not cP then setStat("selecciona un centro primero",T.danger); return end
         local sharing=isSharing(); local activeData=getActiveData()
         local invItem=activeData and activeData:FindFirstChild(sBN)
-        if not invItem then setStat("material no valido",T.danger); return end
-        
+        if not invItem or invItem.Value<=0 then setStat("material no valido / sin stock",T.danger); return end
         local bTool=getActiveTool("BuildingTool"); if not bTool then setStat("falta BuildingTool",T.danger); return end
         local sTool=getActiveTool("ScalingTool"); local pTool=getActiveTool("PaintingTool")
-        local dTool=getActiveTool("DeleteTool")
-        
         bS.running=true; bS.cancel=false; gbRunRef.value=true
         BB.Text="Cancelar"; BB.BackgroundColor3=T.danger; BB.TextColor3=BLACK; setLocked(true); hPv()
         local ok2,err=pcall(function()
-            local bRF=bTool and bTool:FindFirstChild("RF"); local sRF=sTool and sTool:FindFirstChild("RF"); local pRF=pTool and pTool:FindFirstChild("RF")
-            local dRF=dTool and dTool:FindFirstChild("RF")
-            if not bRF then error("BuildingTool sin RF") end
-            
-            -- EXPLOTACIÓN DE BLOQUES INFINITOS
-            if dRF and sRF and baseCPos then
-                local zone = closestZone(myRefPos())
-                setStat("Preparando bloques infinitos...", T.warn)
-                
-                local zoneX, zoneZ = baseCPos.X, baseCPos.Z
-                local prepCFrame1 = CFrame.new(zoneX, -249982, zoneZ, -0.644591, 0, 0.764528, 0, 1, 0, -0.764528, 0, -0.644591)
-                local prepCFrame2 = CFrame.new(zoneX, -250000, zoneZ, 0.764528, 0, 0.644591, 0, 1, 0, -0.644591, 0, 0.764528)
-                local prepSize = Vector3.new(390.632, 2048, 0.001) -- Exactamente 0.001 como muestra el spy
-                
-                local function runPrep(name, qty, spamCount)
-                    pcall(function()
-                        bRF:InvokeServer(name, qty, zone, prepCFrame1, true, nil, nil, false)
-                        task.wait(0.2)
-                        local blk = nil
-                        local folder = userFolder(LP.Name)
-                        if folder then
-                            for _=1, 20 do
-                                for _, child in ipairs(folder:GetChildren()) do
-                                    if child.Name == name then blk = child break end
-                                end
-                                if blk then break end
-                                task.wait(0.1)
-                            end
-                        end
-                        if blk then
-                            for _ = 1, spamCount do
-                                task.spawn(function()
-                                    pcall(function() sRF:InvokeServer(blk, prepSize, prepCFrame2) end)
-                                end)
-                            end
-                            task.wait(1.5)
-                            pcall(function() dRF:InvokeServer(blk) end)
-                            task.wait(0.5)
-                        end
-                    end)
-                end
-                
-                runPrep("SmoothWoodBlock", 1000, 60)
-                runPrep("TitaniumBlock", 11137, 60)
-                runPrep(sBN, 1000, 60)
-                
-                setStat("Preparación lista. Iniciando construcción...", T.sub)
-                task.wait(0.5)
-            end
-            
             local plan=gS(SHAPES[sS],cP,rP()); local total=#plan
             if not sharing then equipTool(bTool); equipTool(sTool); if bUC and pTool then equipTool(pTool) end end
-            
+            local bRF=bTool and bTool:FindFirstChild("RF"); local sRF=sTool and sTool:FindFirstChild("RF"); local pRF=pTool and pTool:FindFirstChild("RF")
+            if not bRF then error("BuildingTool sin RF") end
             local folder=userFolder(LP.Name); hookFolder(folder)
             local placed=0; local pBl={}
 
-            local TARGET_BPS  = 50 -- Reducido a 50 para evitar lag de servidor
+            -- ── Rate-limiter: 255 bloques/segundo ──────────────────────────
+            local TARGET_BPS  = 255
             local nextSlot    = tick()
             local function waitForSlot()
                 local now = tick()
                 if now < nextSlot then task.wait(nextSlot - now) end
                 nextSlot = math.max(nextSlot, tick()) + 1 / TARGET_BPS
             end
+            -- ───────────────────────────────────────────────────────────────
 
             local function placeOne(seg)
-                -- 1. Crear el bloque exactamente abajo de la zona (Y = -250000)
-                local voidCFrame = CFrame.new(seg.cframe.X, -250000, seg.cframe.Z) * (seg.cframe - seg.cframe.Position)
-                local ret = bRF:InvokeServer(sBN, 1000, nil, nil, true, voidCFrame, nil, false)
+                local ret=bRF:InvokeServer(sBN,invItem.Value,nil,seg.cframe,true,seg.cframe,false)
                 local blk
-                if typeof(ret) == "Instance" then
-                    blk = ret
-                else
-                    blk = popBlock(3)
-                end
-                
-                -- 2. Teletransportar en 2 pasos (como vimos en el spy)
-                if blk and sRF then
-                    pcall(function() sRF:InvokeServer(blk, Vector3.new(4, 4, 4), seg.cframe) end)
-                    pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end)
-                end
+                if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
+                if blk and sRF then pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end) end
                 return blk
             end
 
-            local WORKERS = sharing and 10 or 50
+            local WORKERS = sharing and 50 or 255
             local nextIdx = 1; local active = WORKERS
 
             local function worker()
                 while true do
                     if bS.cancel then break end
+                    if invItem.Value<=0 then break end
                     local i=nextIdx; nextIdx=nextIdx+1; if i>total then break end
                     if not folder or folder.Parent==nil then folder=userFolder(LP.Name); hookFolder(folder) end
-                    waitForSlot()
+                    waitForSlot()                   -- espera el slot de 1/255 s
                     local blk=placeOne(plan[i])
                     if blk then placed=placed+1; pBl[#pBl+1]=blk end
                 end
