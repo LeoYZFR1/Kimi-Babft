@@ -805,16 +805,28 @@ function FormasModule.init(ENV)
         if not cP then setStat("selecciona un centro primero",T.danger); return end
         local sharing=isSharing(); local activeData=getActiveData()
         local invItem=activeData and activeData:FindFirstChild(sBN)
-        if not invItem or invItem.Value<=0 then setStat("material no valido / sin stock",T.danger); return end
         local bTool=getActiveTool("BuildingTool"); if not bTool then setStat("falta BuildingTool",T.danger); return end
         local sTool=getActiveTool("ScalingTool"); local pTool=getActiveTool("PaintingTool")
+        local dTool=getActiveTool("DeleteTool") -- Necesario para el bypass
+
+        -- Detectar la zona dinámicamente para el bypass
+        local myZone = closestZone(myRefPos())
+        if not myZone then
+            setStat("Advertencia: Zona no encontrada. Modo normal", T.warn)
+            if not invItem or invItem.Value<=0 then setStat("material no valido / sin stock",T.danger); return end
+        end
+
         bS.running=true; bS.cancel=false; gbRunRef.value=true
         BB.Text="Cancelar"; BB.BackgroundColor3=T.danger; BB.TextColor3=BLACK; setLocked(true); hPv()
         local ok2,err=pcall(function()
             local plan=gS(SHAPES[sS],cP,rP()); local total=#plan
-            if not sharing then equipTool(bTool); equipTool(sTool); if bUC and pTool then equipTool(pTool) end end
-            local bRF=bTool and bTool:FindFirstChild("RF"); local sRF=sTool and sTool:FindFirstChild("RF"); local pRF=pTool and pTool:FindFirstChild("RF")
+            if not sharing then equipTool(bTool); equipTool(sTool); if bUC and pTool then equipTool(pTool) end; if dTool then equipTool(dTool) end end
+
+            local bRF=bTool and bTool:FindFirstChild("RF"); local sRF=sTool and sTool:FindFirstChild("RF")
+            local pRF=pTool and pTool:FindFirstChild("RF")
+            local dRF = dTool and dTool:FindFirstChild("RF")
             if not bRF then error("BuildingTool sin RF") end
+
             local folder=userFolder(LP.Name); hookFolder(folder)
             local placed=0; local pBl={}
 
@@ -828,11 +840,58 @@ function FormasModule.init(ENV)
             end
             -- ───────────────────────────────────────────────────────────────
 
+            -- ── BYPASS BLOQUES INFINITOS ───────────────────────────────────
+            if myZone and sRF then
+                setStat("Preparando bloques infinitos...", T.warn)
+                task.wait(0.2)
+                blockQueue = {} -- Limpiamos la cola por si acaso
+                local prepCFrame = CFrame.new(221.834, -250000, 289.493) -- Mismas coordenadas del log
+                local prepBlock = nil
+
+                -- 1. Creamos el bloque engañoso en el vacío
+                pcall(function()
+                    local ret = bRF:InvokeServer(sBN, invItem and invItem.Value or 30, myZone, prepCFrame, true, nil, nil, false)
+                    if typeof(ret)=="Instance" and ret:IsA("BasePart") then prepBlock = ret end
+                end)
+                if not prepBlock then prepBlock = popBlock(2) end
+
+                -- 2. Lo agrandamos para forzar el glitch del servidor (14 veces como en tu log)
+                if prepBlock then
+                    local giantSize = Vector3.new(390.632, 2048, 0.001)
+                    for _ = 1, 14 do
+                        pcall(function() sRF:InvokeServer(prepBlock, giantSize, prepCFrame) end)
+                        task.wait(0.02)
+                    end
+                    -- 3. Lo eliminamos para limpiar el cache
+                    if dRF then
+                        pcall(function() dRF:InvokeServer(prepBlock) end)
+                    end
+                    task.wait(0.2)
+                end
+                blockQueue = {} -- Volvemos a limpiar para los bloques reales
+            end
+            -- ───────────────────────────────────────────────────────────────
+
             local function placeOne(seg)
-                local ret=bRF:InvokeServer(sBN,invItem.Value,nil,seg.cframe,true,seg.cframe,false)
                 local blk
-                if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
-                if blk and sRF then pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end) end
+                if myZone then
+                    -- MODO INFINITO: Mandar el bloque muy abajo y luego moverlo a su posición con ScalingTool
+                    local bypassPos = Vector3.new(seg.cframe.Position.X, -250000, seg.cframe.Position.Z)
+                    local bypassCFrame = CFrame.new(bypassPos) * (seg.cframe - seg.cframe.Position)
+
+                    local ret = bRF:InvokeServer(sBN, invItem and invItem.Value or 30, myZone, bypassCFrame, true, nil, nil, false)
+                    if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
+
+                    -- Ahora escalamos y movemos a la posición real deseada
+                    if blk and sRF then
+                        pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end)
+                    end
+                else
+                    -- MODO NORMAL
+                    local ret=bRF:InvokeServer(sBN,invItem.Value,nil,seg.cframe,true,seg.cframe,false)
+                    if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
+                    if blk and sRF then pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end) end
+                end
                 return blk
             end
 
@@ -842,9 +901,12 @@ function FormasModule.init(ENV)
             local function worker()
                 while true do
                     if bS.cancel then break end
-                    if invItem.Value<=0 then break end
+                    -- Si tenemos zona (myZone), no validamos el inventario para tener bloques INFINITOS
+                    if not myZone and invItem and invItem.Value<=0 then break end
+
                     local i=nextIdx; nextIdx=nextIdx+1; if i>total then break end
                     if not folder or folder.Parent==nil then folder=userFolder(LP.Name); hookFolder(folder) end
+
                     waitForSlot()                   -- espera el slot de 1/255 s
                     local blk=placeOne(plan[i])
                     if blk then placed=placed+1; pBl[#pBl+1]=blk end
