@@ -315,7 +315,7 @@ function FormasModule.init(ENV)
     end
 
     local BInput={}
-    local PARAM_MINS={radius=0.01,height=0.01,thick=0.01,count=4,point=0}
+    local PARAM_MINS={radius=0.01,height=0.01,thick=0.001,count=4,point=0}
     local rP=function()
         return {
             radius=math.max(PARAM_MINS.radius,tonumber(BInput.bRadius and BInput.bRadius.Text) or 20),
@@ -365,7 +365,17 @@ function FormasModule.init(ENV)
         bx.TextXAlignment=Enum.TextXAlignment.Center
         local br=btn(row,"+",UDim2.new(0,24,0,24),UDim2.new(1,-24,0,0),T.btnAlt)
         local decimal=(step<1) or (minVal~=nil and minVal<1)
-        local function fmt(n) if minVal then n=math.max(minVal,n) end; if decimal then if n==math.floor(n) then return tostring(math.floor(n)) else return string.format("%.2f",n) end else return tostring(math.floor(n+0.5)) end end
+        local function fmt(n)
+            if minVal then n=math.max(minVal,n) end
+            if decimal then
+                if n==math.floor(n) then return tostring(math.floor(n)) end
+                local s=string.format("%.3f",n)
+                s=s:gsub("0+$",""):gsub("%.$","")
+                return s
+            else
+                return tostring(math.floor(n+0.5))
+            end
+        end
         local function smartStep(cur,dir)
             if minVal~=nil and dir<0 and cur<=minVal+0.0001 then return minVal end
             if decimal then local curIsInt=(math.abs(cur-math.floor(cur+0.5))<0.0001); if curIsInt then local iv=math.floor(cur+0.5); if dir>0 then return iv>=1 and(iv+1) or math.floor((cur+0.1)*100+0.5)/100 else if iv>1 then return math.max(minVal or -math.huge,iv-1) elseif iv==1 then return math.max(minVal or -math.huge,0.9) else local nx=cur<=0.1+0.0001 and math.floor((cur-0.01)*1000+0.5)/1000 or math.floor((cur-0.1)*100+0.5)/100; return minVal and math.max(minVal,nx) or nx end end else if dir>0 then if cur<0.1-0.0001 then return math.floor((cur+0.01)*1000+0.5)/1000 else local ni=math.floor(cur)+1; return(ni-cur<=0.1+0.0001) and ni or math.floor((cur+0.1)*100+0.5)/100 end else local nx=cur<=0.1+0.0001 and math.floor((cur-0.01)*1000+0.5)/1000 or math.floor((cur-0.1)*100+0.5)/100; return minVal and math.max(minVal,nx) or nx end end else local nx=math.floor(cur+dir*step+0.5); return minVal and math.max(minVal,nx) or nx end
@@ -431,7 +441,7 @@ function FormasModule.init(ENV)
         local rRad=bRow(24, function() local d=SHAPES[sS]; return d and d.kind~="text" end); BInput.bRadius=mkNumRow(rRad,"Radio","20",1,0.01)
         local rCnt=bRow(24,function() local d=SHAPES[sS]; return d and d.useCount~=false end); BInput.bSteps=mkNumRow(rCnt,"Parts","120",4,4)
         local rHgt=bRow(24,function() local d=SHAPES[sS]; return d and d.useHeight==true end); BInput.bSizeY=mkNumRow(rHgt,"Altura","8",1,0.01)
-        local rThk=bRow(24); BInput.bThick=mkNumRow(rThk,"Grosor","1",0.1,0.01)
+        local rThk=bRow(24); BInput.bThick=mkNumRow(rThk,"Grosor","1",0.1,0.001)
         local rPnt=bRow(24,function() local d=SHAPES[sS]; return d and d.usePoint==true end); BInput.bPunta=mkNumRow(rPnt,"Punta","0",0.1,0)
 
         local rTxtW=bRow(24, function() local d=SHAPES[sS]; return d and d.kind=="text" end)
