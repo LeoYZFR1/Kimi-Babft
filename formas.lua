@@ -823,15 +823,15 @@ function FormasModule.init(ENV)
                 local zone = closestZone(myRefPos())
                 setStat("Preparando bloques infinitos...", T.warn)
                 
-                local prepX, prepZ = baseCPos.X, baseCPos.Z
-                local prepCFrame1 = CFrame.new(prepX, -249982, prepZ, -0.644591, 0, 0.764528, 0, 1, 0, -0.764528, 0, -0.644591)
-                local prepCFrame2 = CFrame.new(prepX, -250000, prepZ, 0.764528, 0, 0.644591, 0, 1, 0, -0.644591, 0, 0.764528)
-                local prepSize = Vector3.new(390.632, 2048, 1.1755e-38)
+                local zoneX, zoneZ = baseCPos.X, baseCPos.Z
+                local prepCFrame1 = CFrame.new(zoneX, -249982, zoneZ, -0.644591, 0, 0.764528, 0, 1, 0, -0.764528, 0, -0.644591)
+                local prepCFrame2 = CFrame.new(zoneX, -250000, zoneZ, 0.764528, 0, 0.644591, 0, 1, 0, -0.644591, 0, 0.764528)
+                local prepSize = Vector3.new(390.632, 2048, 0.001) -- Exactamente 0.001 como muestra el spy
                 
                 local function runPrep(name, qty, spamCount)
                     pcall(function()
                         bRF:InvokeServer(name, qty, zone, prepCFrame1, true, nil, nil, false)
-                        task.wait(0.1)
+                        task.wait(0.2)
                         local blk = nil
                         local folder = userFolder(LP.Name)
                         if folder then
@@ -849,8 +849,9 @@ function FormasModule.init(ENV)
                                     pcall(function() sRF:InvokeServer(blk, prepSize, prepCFrame2) end)
                                 end)
                             end
-                            task.wait(1)
+                            task.wait(1.5)
                             pcall(function() dRF:InvokeServer(blk) end)
+                            task.wait(0.5)
                         end
                     end)
                 end
@@ -869,7 +870,7 @@ function FormasModule.init(ENV)
             local folder=userFolder(LP.Name); hookFolder(folder)
             local placed=0; local pBl={}
 
-            local TARGET_BPS  = 255
+            local TARGET_BPS  = 50 -- Reducido a 50 para evitar lag de servidor
             local nextSlot    = tick()
             local function waitForSlot()
                 local now = tick()
@@ -878,20 +879,25 @@ function FormasModule.init(ENV)
             end
 
             local function placeOne(seg)
-                -- CFrame fantasma: La misma X y Z de destino, pero muy abajo en Y (-250000)
+                -- 1. Crear el bloque exactamente abajo de la zona (Y = -250000)
                 local voidCFrame = CFrame.new(seg.cframe.X, -250000, seg.cframe.Z) * (seg.cframe - seg.cframe.Position)
-                
-                -- 1. Mandar a construir el bloque en el vacío
                 local ret = bRF:InvokeServer(sBN, 1000, nil, nil, true, voidCFrame, nil, false)
                 local blk
-                if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
+                if typeof(ret) == "Instance" then
+                    blk = ret
+                else
+                    blk = popBlock(3)
+                end
                 
-                -- 2. Escalar y teletransportar el bloque a la posición real
-                if blk and sRF then pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end) end
+                -- 2. Teletransportar en 2 pasos (como vimos en el spy)
+                if blk and sRF then
+                    pcall(function() sRF:InvokeServer(blk, Vector3.new(4, 4, 4), seg.cframe) end)
+                    pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end)
+                end
                 return blk
             end
 
-            local WORKERS = sharing and 50 or 255
+            local WORKERS = sharing and 10 or 50
             local nextIdx = 1; local active = WORKERS
 
             local function worker()
