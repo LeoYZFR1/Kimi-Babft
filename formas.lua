@@ -503,7 +503,7 @@ function FormasModule.init(ENV)
 
     do
         local rColorMat=bRow(28)
-        local colBtnInd=mk("TextButton",rColorMat,{Size=UDim2.new(0,22,0,22),Position=UDim2.new(0,4,0.5,-11),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,Text="",AutoButtonColor:false})
+        local colBtnInd=mk("TextButton",rColorMat,{Size=UDim2.new(0,22,0,22),Position=UDim2.new(0,4,0.5,-11),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,Text="",AutoButtonColor=false})
         corner(colBtnInd,11); stroke(colBtnInd,T.text,1.5)
         local bOP=btn(rColorMat,"Elegir color",UDim2.new(0,80,0,24),UDim2.new(0,30,0.5,-12),T.btn)
         local bTC=btn(rColorMat,"ON",UDim2.new(0,36,0,24),UDim2.new(0,114,0.5,-12),T.btnAlt)
@@ -818,13 +818,14 @@ function FormasModule.init(ENV)
             local dRF=dTool and dTool:FindFirstChild("RF")
             if not bRF then error("BuildingTool sin RF") end
             
-            -- ── EXPLOTACIÓN DE BLOQUES INFINITOS ──────────────────────────
-            if dRF and sRF then
+            -- EXPLOTACIÓN DE BLOQUES INFINITOS
+            if dRF and sRF and baseCPos then
                 local zone = closestZone(myRefPos())
                 setStat("Preparando bloques infinitos...", T.warn)
                 
-                local prepCFrame1 = CFrame.new(0, -249982, 0, -0.644591, 0, 0.764528, 0, 1, 0, -0.764528, 0, -0.644591)
-                local prepCFrame2 = CFrame.new(221.834, -250000, 289.493, 0.764528, 0, 0.644591, 0, 1, 0, -0.644591, 0, 0.764528)
+                local prepX, prepZ = baseCPos.X, baseCPos.Z
+                local prepCFrame1 = CFrame.new(prepX, -249982, prepZ, -0.644591, 0, 0.764528, 0, 1, 0, -0.764528, 0, -0.644591)
+                local prepCFrame2 = CFrame.new(prepX, -250000, prepZ, 0.764528, 0, 0.644591, 0, 1, 0, -0.644591, 0, 0.764528)
                 local prepSize = Vector3.new(390.632, 2048, 1.1755e-38)
                 
                 local function runPrep(name, qty, spamCount)
@@ -861,7 +862,6 @@ function FormasModule.init(ENV)
                 setStat("Preparación lista. Iniciando construcción...", T.sub)
                 task.wait(0.5)
             end
-            -- ──────────────────────────────────────────────────────────────
             
             local plan=gS(SHAPES[sS],cP,rP()); local total=#plan
             if not sharing then equipTool(bTool); equipTool(sTool); if bUC and pTool then equipTool(pTool) end end
@@ -877,16 +877,16 @@ function FormasModule.init(ENV)
                 nextSlot = math.max(nextSlot, tick()) + 1 / TARGET_BPS
             end
 
-            -- El CFrame fantasma que engaña al servidor
-            local dummyCF = CFrame.new(213.834, -199208, 295.493, 0, 0, -1, 0, 1, 0, 1, 0, 0)
-            
             local function placeOne(seg)
-                -- 1. Mandar a construir el bloque en el vacío (dummyCF) para bypassear la zona
-                local ret = bRF:InvokeServer(sBN, 1000, nil, nil, true, dummyCF, nil, false)
+                -- CFrame fantasma: La misma X y Z de destino, pero muy abajo en Y (-250000)
+                local voidCFrame = CFrame.new(seg.cframe.X, -250000, seg.cframe.Z) * (seg.cframe - seg.cframe.Position)
+                
+                -- 1. Mandar a construir el bloque en el vacío
+                local ret = bRF:InvokeServer(sBN, 1000, nil, nil, true, voidCFrame, nil, false)
                 local blk
                 if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
                 
-                -- 2. Teletransportar el bloque a la posición real usando ScalingTool
+                -- 2. Escalar y teletransportar el bloque a la posición real
                 if blk and sRF then pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end) end
                 return blk
             end
