@@ -503,7 +503,7 @@ function FormasModule.init(ENV)
 
     do
         local rColorMat=bRow(28)
-        local colBtnInd=mk("TextButton",rColorMat,{Size=UDim2.new(0,22,0,22),Position=UDim2.new(0,4,0.5,-11),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,Text="",AutoButtonColor:false})
+        local colBtnInd=mk("TextButton",rColorMat,{Size=UDim2.new(0,22,0,22),Position=UDim2.new(0,4,0.5,-11),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,Text="",AutoButtonColor=false})
         corner(colBtnInd,11); stroke(colBtnInd,T.text,1.5)
         local bOP=btn(rColorMat,"Elegir color",UDim2.new(0,80,0,24),UDim2.new(0,30,0.5,-12),T.btn)
         local bTC=btn(rColorMat,"ON",UDim2.new(0,36,0,24),UDim2.new(0,114,0.5,-12),T.btnAlt)
@@ -572,7 +572,7 @@ function FormasModule.init(ENV)
     local Handles=mk("Handles",SG,{Adornee=cDummy,Style=Enum.HandlesStyle.Movement,Color3=PURPLE_GAMER,Visible=false})
     pcall(function() Handles.AlwaysOnTop=true end)
     local ArcAdornee=mk("Part",envF,{Size=Vector3.new(12,12,12),Transparency=1,Anchored=true,CanCollide=false,CanQuery=false,Material=Enum.Material.Plastic,Position=Vector3.new(0,-9999,0)})
-    local Arc=mk("ArcHandles",SG,{Adornee=ArcAdornee,Color3=PURPLE_GAMER,Visible=false})
+    local Arc=mk("ArcHandles",SG,{Adornee=ArcAdornee,Color3=PURPLE_GAMER,Visible:false})
     pcall(function() Arc.AlwaysOnTop=true end)
 
     local function updateHandles()
@@ -809,7 +809,6 @@ function FormasModule.init(ENV)
         local sTool=getActiveTool("ScalingTool"); local pTool=getActiveTool("PaintingTool")
         local dTool=getActiveTool("DeleteTool") -- Necesitamos la DeleteTool para el bypass
 
-        -- Detectar la zona dinámicamente para el bypass
         local myZone = closestZone(myRefPos())
         if not myZone then
             setStat("Advertencia: Zona no encontrada. Modo normal", T.warn)
@@ -830,7 +829,6 @@ function FormasModule.init(ENV)
             local folder=userFolder(LP.Name); hookFolder(folder)
             local placed=0; local pBl={}
 
-            -- ── Rate-limiter: 255 bloques/segundo ──────────────────────────
             local TARGET_BPS  = 255
             local nextSlot    = tick()
             local function waitForSlot()
@@ -838,56 +836,56 @@ function FormasModule.init(ENV)
                 if now < nextSlot then task.wait(nextSlot - now) end
                 nextSlot = math.max(nextSlot, tick()) + 1 / TARGET_BPS
             end
-            -- ───────────────────────────────────────────────────────────────
 
+            local bypassReady = false
             -- ── BYPASS BLOQUES INFINITOS (FASE DE PREPARACIÓN) ──────────────
             if myZone and sRF and dRF then
                 setStat("Preparando bloques infinitos...", T.warn)
                 task.wait(0.5)
-                blockQueue = {} -- Limpiamos la cola por si acaso
-                -- Usamos las coordenadas exactas del log para el bloque de preparación
+                blockQueue = {}
                 local prepCFrame = CFrame.new(221.834, -250000, 289.493, 0.764528, 0, 0.644591, 0, 1, 0, -0.644591, 0, 0.764528)
                 local prepBlock = nil
 
-                -- 1. Creamos el bloque engañoso en el vacío pasándole la Zona
                 pcall(function()
                     local ret = bRF:InvokeServer(sBN, 30, myZone, prepCFrame, true, nil, nil, false)
                     if typeof(ret)=="Instance" and ret:IsA("BasePart") then prepBlock = ret end
                 end)
                 if not prepBlock then prepBlock = popBlock(2) end
 
-                -- 2. Lo agrandamos 14 veces para forzar el glitch del servidor
                 if prepBlock then
                     local giantSize = Vector3.new(390.632, 2048, 0.001)
                     for _ = 1, 14 do
                         pcall(function() sRF:InvokeServer(prepBlock, giantSize, prepCFrame) end)
                         task.wait(0.02)
                     end
-                    -- 3. Lo eliminamos para limpiar el cache del servidor
                     pcall(function() dRF:InvokeServer(prepBlock) end)
                     task.wait(0.5)
+                    bypassReady = true
+                else
+                    setStat("Error en preparación, modo normal", T.danger)
                 end
-                blockQueue = {} -- Volvemos a limpiar para los bloques reales
+                blockQueue = {}
             end
             -- ───────────────────────────────────────────────────────────────
 
             local function placeOne(seg)
                 local blk
-                if myZone and sRF then
-                    -- MODO INFINITO: Aquí está la clave, NO pasamos la zona (nil, nil) y el CFrame va en el argumento 6
-                    local bypassPos = Vector3.new(seg.cframe.X, -250000, seg.cframe.Z)
-                    local bypassCFrame = CFrame.new(bypassPos) * (seg.cframe - seg.cframe.Position)
+                if bypassReady then
+                    -- MODO INFINITO: Coordenadas alejadas aleatorias en X, Y, Z
+                    local bx = math.random(-20000, 20000)
+                    local by = math.random(-200000, -100000)
+                    local bz = math.random(-20000, 20000)
+                    local bypassCFrame = CFrame.new(bx, by, bz)
 
                     local ret = bRF:InvokeServer(sBN, 30, nil, nil, true, bypassCFrame, nil, false)
                     if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
 
-                    -- Ahora escalamos y movemos a la posición real deseada
                     if blk and sRF then
                         pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end)
                     end
                 else
                     -- MODO NORMAL
-                    local ret=bRF:InvokeServer(sBN,invItem.Value,nil,seg.cframe,true,seg.cframe,nil,false)
+                    local ret=bRF:InvokeServer(sBN, invItem and invItem.Value or 0, nil, seg.cframe, true, seg.cframe, nil, false)
                     if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
                     if blk and sRF then pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end) end
                 end
@@ -900,13 +898,12 @@ function FormasModule.init(ENV)
             local function worker()
                 while true do
                     if bS.cancel then break end
-                    -- Si tenemos zona (myZone), no validamos el inventario para tener bloques INFINITOS
-                    if not myZone and invItem and invItem.Value<=0 then break end
+                    if not bypassReady and (not invItem or invItem.Value<=0) then break end
 
                     local i=nextIdx; nextIdx=nextIdx+1; if i>total then break end
                     if not folder or folder.Parent==nil then folder=userFolder(LP.Name); hookFolder(folder) end
 
-                    waitForSlot()                   -- espera el slot de 1/255 s
+                    waitForSlot()
                     local blk=placeOne(plan[i])
                     if blk then placed=placed+1; pBl[#pBl+1]=blk end
                 end
