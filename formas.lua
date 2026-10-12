@@ -503,7 +503,7 @@ function FormasModule.init(ENV)
 
     do
         local rColorMat=bRow(28)
-        local colBtnInd=mk("TextButton",rColorMat,{Size=UDim2.new(0,22,0,22),Position=UDim2.new(0,4,0.5,-11),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,Text="",AutoButtonColor=false})
+        local colBtnInd=mk("TextButton",rColorMat,{Size=UDim2.new(0,22,0,22),Position=UDim2.new(0,4,0.5,-11),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,Text="",AutoButtonColor:false})
         corner(colBtnInd,11); stroke(colBtnInd,T.text,1.5)
         local bOP=btn(rColorMat,"Elegir color",UDim2.new(0,80,0,24),UDim2.new(0,30,0.5,-12),T.btn)
         local bTC=btn(rColorMat,"ON",UDim2.new(0,36,0,24),UDim2.new(0,114,0.5,-12),T.btnAlt)
@@ -805,7 +805,7 @@ function FormasModule.init(ENV)
         if not cP then setStat("selecciona un centro primero",T.danger); return end
         local sharing=isSharing(); local activeData=getActiveData()
         local invItem=activeData and activeData:FindFirstChild(sBN)
-        if not invItem then setStat("material no valido / sin stock",T.danger); return end
+        if not invItem then setStat("material no valido",T.danger); return end
         
         local bTool=getActiveTool("BuildingTool"); if not bTool then setStat("falta BuildingTool",T.danger); return end
         local sTool=getActiveTool("ScalingTool"); local pTool=getActiveTool("PaintingTool")
@@ -855,8 +855,7 @@ function FormasModule.init(ENV)
                 end
                 
                 runPrep("SmoothWoodBlock", 1000, 60)
-                runPrep("TitaniumBlock", 11137, 100)
-                runPrep("WoodBlock", 1469, 60)
+                runPrep("TitaniumBlock", 11137, 60)
                 runPrep(sBN, 1000, 60)
                 
                 setStat("Preparación lista. Iniciando construcción...", T.sub)
@@ -870,7 +869,6 @@ function FormasModule.init(ENV)
             local folder=userFolder(LP.Name); hookFolder(folder)
             local placed=0; local pBl={}
 
-            -- ── Rate-limiter: 255 bloques/segundo ──────────────────────────
             local TARGET_BPS  = 255
             local nextSlot    = tick()
             local function waitForSlot()
@@ -878,14 +876,18 @@ function FormasModule.init(ENV)
                 if now < nextSlot then task.wait(nextSlot - now) end
                 nextSlot = math.max(nextSlot, tick()) + 1 / TARGET_BPS
             end
-            -- ───────────────────────────────────────────────────────────────
 
+            -- El CFrame fantasma que engaña al servidor
+            local dummyCF = CFrame.new(213.834, -199208, 295.493, 0, 0, -1, 0, 1, 0, 1, 0, 0)
+            
             local function placeOne(seg)
-                -- Modificado para pasar 1000 en lugar de invItem.Value
-                local ret=bRF:InvokeServer(sBN, 1000, nil, seg.cframe, true, seg.cframe, false)
+                -- 1. Mandar a construir el bloque en el vacío (dummyCF) para bypassear la zona
+                local ret = bRF:InvokeServer(sBN, 1000, nil, nil, true, dummyCF, nil, false)
                 local blk
                 if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock(3) end
-                if blk and sRF then pcall(function() sRF:InvokeServer(blk,seg.size,seg.cframe) end) end
+                
+                -- 2. Teletransportar el bloque a la posición real usando ScalingTool
+                if blk and sRF then pcall(function() sRF:InvokeServer(blk, seg.size, seg.cframe) end) end
                 return blk
             end
 
