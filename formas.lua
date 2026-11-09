@@ -60,6 +60,9 @@ function FormasModule.init(ENV)
 
     local gS,SHAPES
     do
+        -- ─────────────────────────────────────────────────────────────────────────
+        --  FONT 5×5 (original, sin cambios)
+        -- ─────────────────────────────────────────────────────────────────────────
         local FONT5x5 = {
             A="01110 10001 11111 10001 10001", B="11110 10001 11110 10001 11110", C="01110 10000 10000 10000 01110",
             D="11110 10001 10001 10001 11110", E="11111 10000 11110 10000 11111", F="11111 10000 11110 10000 10000",
@@ -109,6 +112,9 @@ function FormasModule.init(ENV)
             TRIMMED_FONT[k] = { str = table.concat(newRows, " "), w = (maxC - minC + 1) }
         end
 
+        -- ─────────────────────────────────────────────────────────────────────────
+        --  HELPERS ORIGINALES
+        -- ─────────────────────────────────────────────────────────────────────────
         local function circPts(n) local p={}; for i=0,n-1 do local a=(i/n)*math.pi*2; p[#p+1]=Vector2.new(math.cos(a),math.sin(a)) end; return p end
         local function polyPts(sides,off) local p={}; for k=0,sides-1 do local a=off+k*(2*math.pi/sides); p[#p+1]=Vector2.new(math.cos(a),math.sin(a)) end; return p end
         local function heartPts() local p={}; for k=0,127 do local t=(k/128)*2*math.pi; p[#p+1]=Vector2.new(16*math.sin(t)^3/17,-(13*math.cos(t)-5*math.cos(2*t)-2*math.cos(3*t)-math.cos(4*t))/17) end; return p end
@@ -213,11 +219,9 @@ function FormasModule.init(ENV)
             local scaleX = math.max(0.1, P.letterWidth or 1)
             local scaleY = math.max(0.1, P.letterHeight or 1)
             local charH = 5 * pxSize * scaleY
-
             local lines = { text }
             local totalH = #lines * charH + (#lines - 1) * spaceSize
             local startY = totalH / 2
-
             for _, line in ipairs(lines) do
                 local lineWidth = 0
                 for i = 1, #line do
@@ -228,7 +232,6 @@ function FormasModule.init(ENV)
                     lineWidth = lineWidth + (w * pxSize * scaleX)
                     if i < #line then lineWidth = lineWidth + spaceSize end
                 end
-
                 local currentX = -lineWidth / 2
                 for i = 1, #line do
                     local ch = line:sub(i,i)
@@ -236,7 +239,6 @@ function FormasModule.init(ENV)
                     local charData = isSpace and {str="0", w=2} or (TRIMMED_FONT[ch] or TRIMMED_FONT[ch:upper()] or TRIMMED_FONT["?"])
                     local w = charData.w
                     local wSize = w * pxSize * scaleX
-
                     if not isSpace then
                         local rows = string.split(charData.str, " ")
                         for r=1, #rows do
@@ -259,16 +261,261 @@ function FormasModule.init(ENV)
             end
         end
 
+        -- ─────────────────────────────────────────────────────────────────────────
+        --  SISTEMA DE ENGRANAJES
+        -- ─────────────────────────────────────────────────────────────────────────
+
+        --[[
+            buildGear(plan, cx, cy, cz, P, phaseOffset)
+
+            Genera un engranaje completo en coordenadas world (cx, cy, cz).
+            P contiene:
+              gTeeth       – número de dientes
+              gRadius      – radio primitivo (pitch radius)
+              gToothLen    – altura del diente (addendum + dedendum combinados)
+              gThick       – grosor axial del engranaje (eje Y)
+              gToothWidth  – fracción de paso angular que ocupa el diente (0.1-0.9; defecto 0.5)
+              gType        – "recto" | "helicoidal" | "bevel" | "corona"
+              gHelixAngle  – ángulo de hélice en grados (sólo helicoidal)
+              gBevelAngle  – ángulo del cono en grados (sólo bevel, 0-45)
+            phaseOffset    – rotación angular adicional (alineación entre engranajes)
+        ]]
+
+        local function buildGear(plan, cx, cy, cz, P, phaseOffset)
+            local N          = math.max(4,  math.floor(P.gTeeth or 12))
+            local Rp         = math.max(1,  P.gRadius    or 10)   -- radio primitivo
+            local tLen       = math.max(0.5, P.gToothLen  or 3)    -- altura del diente
+            local thick      = math.max(0.5, P.gThick     or 4)    -- grosor axial
+            local toothFrac  = math.clamp(P.gToothWidth or 0.5, 0.1, 0.85)
+            local gType      = P.gType or "recto"
+            local helixDeg   = P.gHelixAngle or 20
+            local bevelDeg   = math.clamp(P.gBevelAngle or 20, 5, 55)
+            phaseOffset      = phaseOffset or 0
+
+            -- Medidas derivadas
+            local Ra = Rp + tLen * 0.65   -- radio addendum (punta del diente)
+            local Rd = Rp - tLen * 0.35   -- radio dedendum (raíz del diente)
+            if Rd < 0.5 then Rd = 0.5 end
+
+            local angStep = (2 * math.pi) / N   -- paso angular entre dientes
+            local toothAng = angStep * toothFrac -- arco angular del diente
+            local gapAng   = angStep * (1 - toothFrac)
+
+            -- Resolución radial y axial del diente
+            local radSteps  = math.max(2, math.floor(tLen / 1.0 + 0.5))
+            local axSteps   = math.max(1, math.floor(thick / 1.0 + 0.5))
+            local radSize   = tLen / radSteps
+            local axSize    = thick / axSteps
+
+            -- Resolución angular del diente (mínimo 1 bloque, máximo según arco)
+            local toothArcLen = toothAng * Ra
+            local angSteps  = math.max(1, math.floor(toothArcLen / 1.2 + 0.5))
+            local angSubStep = toothAng / angSteps
+
+            -- ── Disco base del engranaje (cuerpo entre raíz y eje) ──────────
+            -- Usamos la función de anillo circular existente para el cuerpo
+            -- Dibujamos el cuerpo como una serie de bloques en el plano XZ
+            -- y el grosor en Y.
+            local function addRing(innerR, outerR, numSeg)
+                -- relleno radial
+                local rSteps = math.max(1, math.floor((outerR - innerR) / 1.5 + 0.5))
+                for ri = 0, rSteps - 1 do
+                    local rmid = innerR + (ri + 0.5) * (outerR - innerR) / rSteps
+                    local rSize = (outerR - innerR) / rSteps * 1.02
+                    local segs  = math.max(6, math.floor(2 * math.pi * rmid / (rSize * 0.95) + 0.5))
+                    segs = math.min(segs, numSeg)
+                    local arcLen = (2 * math.pi * rmid) / segs
+                    for si = 0, segs - 1 do
+                        local ang = (si + 0.5) * (2 * math.pi / segs)
+                        local bx = cx + rmid * math.cos(ang)
+                        local bz = cz + rmid * math.sin(ang)
+                        plan[#plan+1] = {
+                            cframe = CFrame.new(bx, cy, bz),
+                            size   = Vector3.new(rSize, thick, arcLen)
+                        }
+                    end
+                end
+            end
+
+            -- Disco desde eje hasta raíz (relleno sólido)
+            local hubR = math.max(0.5, Rd * 0.3)   -- radio del cubo central
+            addRing(hubR, Rd, N * 4)
+
+            -- ── Dientes ──────────────────────────────────────────────────────
+            for tooth = 0, N - 1 do
+                local baseAng = phaseOffset + tooth * angStep + angStep * 0.5
+
+                for ri = 0, radSteps - 1 do
+                    local rMid = Rd + (ri + 0.5) * tLen / radSteps
+
+                    -- Para bevel: escalar radialmente según cono
+                    local bevelScale = 1.0
+                    if gType == "bevel" then
+                        local bevelRad = math.rad(bevelDeg)
+                        bevelScale = 1.0 - (rMid - Rd) / tLen * math.sin(bevelRad) * 0.6
+                        if bevelScale < 0.1 then bevelScale = 0.1 end
+                    end
+
+                    -- Corona: dientes apuntan hacia el interior
+                    local actualR
+                    if gType == "corona" then
+                        actualR = Ra - (ri + 0.5) * tLen / radSteps
+                        if actualR < 0.5 then actualR = 0.5 end
+                    else
+                        actualR = rMid
+                    end
+
+                    for ai = 0, angSteps - 1 do
+                        local angOff = -toothAng * 0.5 + (ai + 0.5) * angSubStep
+
+                        -- Hélice: desplazar ángulo según posición axial
+                        local helixExtra = 0
+                        if gType == "helicoidal" then
+                            -- el ángulo de hélice lo aplicamos en las capas axiales
+                            -- (aquí lo precomputamos promedio; se refina por capa)
+                            helixExtra = 0 -- se aplica por capa axial abajo
+                        end
+
+                        for ai2 = 0, axSteps - 1 do
+                            local axOff = -thick * 0.5 + (ai2 + 0.5) * axSize
+                            local finalAng = baseAng + angOff + helixExtra
+
+                            if gType == "helicoidal" then
+                                local helixRad = math.rad(helixDeg)
+                                local axFrac = (ai2 + 0.5) / axSteps - 0.5
+                                finalAng = baseAng + angOff + axFrac * helixRad * (tLen / Rp) * 2
+                            end
+
+                            -- Bevel: inclinar el diente hacia arriba/afuera según el cono
+                            local bevelY = 0
+                            if gType == "bevel" then
+                                local bevelRad = math.rad(bevelDeg)
+                                bevelY = (rMid - Rd) / tLen * math.tan(bevelRad) * thick * 0.5
+                            end
+
+                            local bx = cx + actualR * bevelScale * math.cos(finalAng)
+                            local by = cy + axOff + bevelY
+                            local bz = cz + actualR * bevelScale * math.sin(finalAng)
+
+                            -- tamaño del bloque del diente
+                            local arcBlockLen = actualR * angSubStep * 1.05
+                            plan[#plan+1] = {
+                                cframe = CFrame.new(bx, by, bz),
+                                size   = Vector3.new(radSize * 1.05, axSize * 1.02, arcBlockLen)
+                            }
+                        end
+                    end
+                end
+            end
+
+            -- ── Cubo central (eje) ───────────────────────────────────────────
+            local hubSegs = math.max(6, math.floor(2 * math.pi * hubR / 1.2 + 0.5))
+            local arcLen2  = (2 * math.pi * hubR) / hubSegs
+            for si = 0, hubSegs - 1 do
+                local ang = (si + 0.5) * (2 * math.pi / hubSegs)
+                plan[#plan+1] = {
+                    cframe = CFrame.new(cx + hubR * math.cos(ang), cy, cz + hubR * math.sin(ang)),
+                    size   = Vector3.new(hubR * 0.6, thick, arcLen2)
+                }
+            end
+        end
+
+        --[[
+            buildGearSet(plan, cx, cy, cz, P)
+            Construye 1, 2 o 3 engranajes correctamente engranados.
+            Parámetros en P:
+              gCount       – 1 | 2 | 3
+              gTeeth1..3   – dientes de cada engranaje
+              gRadius1     – radio del primer engranaje (los demás se calculan para mantener módulo)
+              gToothLen    – altura del diente (igual para todos, define el módulo)
+              gThick       – grosor axial
+              gToothWidth  – fracción diente/paso
+              gType        – tipo de engranaje
+              gHelixAngle  – ángulo hélice
+              gBevelAngle  – ángulo bevel
+        ]]
+        local function buildGearSet(plan, cx, cy, cz, P)
+            local count = math.clamp(math.floor(P.gCount or 1), 1, 3)
+
+            -- Módulo = Rp / (N/2).  Fijamos módulo desde gear1.
+            local N1 = math.max(4, math.floor(P.gTeeth1 or 12))
+            local R1 = math.max(2, P.gRadius1 or 10)
+            local module = R1 / (N1 / 2)   -- módulo primitivo
+
+            -- Dientes y radios de los otros engranajes (mismos módulo)
+            local N2 = math.max(4, math.floor(P.gTeeth2 or 8))
+            local R2 = module * (N2 / 2)
+            local N3 = math.max(4, math.floor(P.gTeeth3 or 6))
+            local R3 = module * (N3 / 2)
+
+            local tLen = math.max(0.5, P.gToothLen or math.max(1.5, module * 0.7))
+
+            -- Backlash (holgura entre dientes para que no se toquen)
+            -- Estándar: ~0.05 * módulo * 2, pero usamos 0.08 para seguridad en bloques
+            local backlash = module * 0.15
+
+            -- ── Gear 1 (siempre se coloca en el centro dado) ─────────────────
+            local P1 = {
+                gTeeth=N1, gRadius=R1, gToothLen=tLen, gThick=P.gThick,
+                gToothWidth=P.gToothWidth, gType=P.gType,
+                gHelixAngle=P.gHelixAngle, gBevelAngle=P.gBevelAngle
+            }
+            buildGear(plan, cx, cy, cz, P1, 0)
+
+            if count >= 2 then
+                -- Distancia entre centros con holgura
+                local dist12 = R1 + R2 + backlash
+
+                -- Fase del gear 2: para que un diente de G2 quede en el hueco de G1.
+                -- El hueco de G1 está a angStep1/2 desde el centro de un diente de G1.
+                -- G2 rota opuesto, así que si G1 tiene un diente apuntando hacia G2
+                -- (ángulo 0 = +X), G2 debe tener un hueco en ese ángulo.
+                -- phase_G2 = pi/N2 (pone el diente de G2 justo entre dos dientes de G1)
+                local phase2 = math.pi / N2 + math.pi  -- el +pi porque apunta de regreso a G1
+
+                -- Colocar G2 a la derecha (+X)
+                local cx2 = cx + dist12
+                local P2 = {
+                    gTeeth=N2, gRadius=R2, gToothLen=tLen, gThick=P.gThick,
+                    gToothWidth=P.gToothWidth, gType=P.gType,
+                    gHelixAngle=P.gHelixAngle, gBevelAngle=P.gBevelAngle
+                }
+                buildGear(plan, cx2, cy, cz, P2, phase2)
+
+                if count >= 3 then
+                    -- G3 se coloca a la derecha de G2
+                    local dist23 = R2 + R3 + backlash
+                    local cx3   = cx2 + dist23
+                    -- G3 engrana con G2: G3 va en fase opuesta a G2.
+                    -- G2 en su punto de contacto con G3 tiene un diente apuntando a +X
+                    -- (ángulo 0 desde el centro de G2). G3 necesita un hueco ahí.
+                    local phase3 = math.pi / N3  -- hueco alineado hacia G2
+
+                    local P3 = {
+                        gTeeth=N3, gRadius=R3, gToothLen=tLen, gThick=P.gThick,
+                        gToothWidth=P.gToothWidth, gType=P.gType,
+                        gHelixAngle=P.gHelixAngle, gBevelAngle=P.gBevelAngle
+                    }
+                    buildGear(plan, cx3, cy, cz, P3, phase3)
+                end
+            end
+        end
+
+        -- ─────────────────────────────────────────────────────────────────────────
+        --  SHAPES TABLE (con Engranaje añadido al final)
+        -- ─────────────────────────────────────────────────────────────────────────
         SHAPES={
-            {label="Circulo",icon="circle",kind="extrude",pts=function() return circPts(96) end,caps="both",fillable=true,useHeight=true,useCount=true,usePoint=false, yOffset=3},
-            {label="Cuadrado",icon="square",kind="extrude",pts=function() return polyPts(4,math.pi/4) end,caps="both",fillable=true,useHeight=true,useCount=true,usePoint=false, yOffset=3},
-            {label="Corazon",icon="heart",kind="extrude",pts=heartPts,caps="both",fillable=true,useHeight=true,useCount=true,usePoint=false, yOffset=3},
-            {label="Cubo",icon="cube",kind="cube3d",caps="both",fillable=false,useHeight=false,useCount=true,usePoint=false, yOffset=20},
-            {label="Esfera",icon="sphere",kind="sphere3d",caps=false,fillable=false,useHeight=false,useCount=true,usePoint=false, yOffset=20},
-            {label="Piramide",icon="pyramid",kind="pyramid",caps="bottom",fillable=false,useHeight=true,useCount=true,usePoint=true,pointy=true, yOffset=4},
-            {label="Capsula",icon="capsule",kind="capsule",caps=false,fillable=false,useHeight=true,useCount=true,usePoint=true,pointy=true, yOffset=24},
-            {label="Texto",icon="text",kind="text",caps=false,fillable=false,useHeight=false,useCount=false,usePoint=false, yOffset=2, rot=CFrame.Angles(0, math.rad(-90), 0)},
+            {label="Circulo",  icon="circle",   kind="extrude",  pts=function() return circPts(96) end, caps="both",   fillable=true,  useHeight=true,  useCount=true,  usePoint=false, yOffset=3},
+            {label="Cuadrado", icon="square",   kind="extrude",  pts=function() return polyPts(4,math.pi/4) end, caps="both", fillable=true, useHeight=true, useCount=true, usePoint=false, yOffset=3},
+            {label="Corazon",  icon="heart",    kind="extrude",  pts=heartPts,  caps="both",   fillable=true,  useHeight=true,  useCount=true,  usePoint=false, yOffset=3},
+            {label="Cubo",     icon="cube",     kind="cube3d",   caps="both",   fillable=false, useHeight=false, useCount=true,  usePoint=false, yOffset=20},
+            {label="Esfera",   icon="sphere",   kind="sphere3d", caps=false,    fillable=false, useHeight=false, useCount=true,  usePoint=false, yOffset=20},
+            {label="Piramide", icon="pyramid",  kind="pyramid",  caps="bottom", fillable=false, useHeight=true,  useCount=true,  usePoint=true,  pointy=true, yOffset=4},
+            {label="Capsula",  icon="capsule",  kind="capsule",  caps=false,    fillable=false, useHeight=true,  useCount=true,  usePoint=true,  pointy=true, yOffset=24},
+            {label="Texto",    icon="text",     kind="text",     caps=false,    fillable=false, useHeight=false, useCount=false, usePoint=false, yOffset=2, rot=CFrame.Angles(0, math.rad(-90), 0)},
+            {label="Engranaje",icon="gear",     kind="gear",     caps=false,    fillable=false, useHeight=false, useCount=false, usePoint=false, yOffset=10},
         }
+
         gS=function(def,cp,P)
             local plan={}; if not cp then return plan end
             local cx,cy,cz=cp.X,cp.Y,cp.Z; local k=def.kind
@@ -278,12 +525,16 @@ function FormasModule.init(ENV)
             elseif k=="pyramid" then buildPyramid(plan,cx,cy,cz,P.radius,P.height,P.thick,P.count,P.point,P.capBottom)
             elseif k=="capsule" then buildCapsule(plan,cx,cy,cz,P.radius,P.height,P.thick,P.count,P.point)
             elseif k=="text" then buildText(plan, cx, cy, cz, P)
+            elseif k=="gear" then buildGearSet(plan, cx, cy, cz, P)
             end
             if hR then local pivot=CFrame.new(cx,cy,cz); local rot=pivot*sR*pivot:Inverse(); for _,s in ipairs(plan) do s.cframe=rot*s.cframe end end
             return plan
         end
     end
 
+    -- ─────────────────────────────────────────────────────────────────────────
+    --  DRAWICON (con icono de engranaje añadido)
+    -- ─────────────────────────────────────────────────────────────────────────
     local drawIcon
     do
         local function dLine(par,x1,y1,x2,y2,col)
@@ -310,10 +561,51 @@ function FormasModule.init(ENV)
                     Font = Enum.Font.GothamBold,
                     TextSize = bsz * 0.45
                 })
+            elseif ic=="gear" then
+                -- Dibuja un engranaje simplificado como icono
+                local innerR = R * 0.42
+                local outerR = R * 0.88
+                local nTeeth = 8
+                local innerRing = mk("Frame",container,{
+                    AnchorPoint=Vector2.new(0.5,0.5),
+                    Position=UDim2.fromScale(0.5,0.5),
+                    Size=UDim2.fromOffset(innerR*2,innerR*2),
+                    BackgroundTransparency=1
+                })
+                corner(innerRing,999)
+                mk("UIStroke",innerRing,{Color=col,Thickness=1.5,ApplyStrokeMode=Enum.ApplyStrokeMode.Border})
+                -- dientes
+                for i=0,nTeeth-1 do
+                    local ang = (i/nTeeth)*math.pi*2
+                    local ang2 = ang + (0.3/nTeeth)*math.pi*2
+                    local ix1 = cx2 + innerR*1.1*math.cos(ang)
+                    local iy1 = cy2 + innerR*1.1*math.sin(ang)
+                    local ox1 = cx2 + outerR*math.cos(ang)
+                    local oy1 = cy2 + outerR*math.sin(ang)
+                    local ox2 = cx2 + outerR*math.cos(ang2)
+                    local oy2 = cy2 + outerR*math.sin(ang2)
+                    local ix2 = cx2 + innerR*1.1*math.cos(ang2)
+                    local iy2 = cy2 + innerR*1.1*math.sin(ang2)
+                    dLine(container,ix1,iy1,ox1,oy1,col)
+                    dLine(container,ox1,oy1,ox2,oy2,col)
+                    dLine(container,ox2,oy2,ix2,iy2,col)
+                end
+                -- hub
+                local hub = mk("Frame",container,{
+                    AnchorPoint=Vector2.new(0.5,0.5),
+                    Position=UDim2.fromScale(0.5,0.5),
+                    Size=UDim2.fromOffset(R*0.22,R*0.22),
+                    BackgroundColor3=col,
+                    BorderSizePixel=0
+                })
+                corner(hub,999)
             end
         end
     end
 
+    -- ─────────────────────────────────────────────────────────────────────────
+    --  INPUT SYSTEM
+    -- ─────────────────────────────────────────────────────────────────────────
     local BInput={}
     local PARAM_MINS={radius=0.01,height=0.01,thick=0.001,count=4,point=0}
     local rP=function()
@@ -329,6 +621,18 @@ function FormasModule.init(ENV)
             letterWidth=math.max(0.1,tonumber(BInput.bLetterWidth and BInput.bLetterWidth.Text) or 1),
             letterHeight=math.max(0.1,tonumber(BInput.bLetterHeight and BInput.bLetterHeight.Text) or 1),
             letterSpacing=math.max(0,tonumber(BInput.bLetterSpace and BInput.bLetterSpace.Text) or 1),
+            -- Gear params
+            gCount     = math.clamp(math.floor(tonumber(BInput.bGearCount and BInput.bGearCount.Text) or 1),1,3),
+            gTeeth1    = math.max(4, math.floor(tonumber(BInput.bGearTeeth1 and BInput.bGearTeeth1.Text) or 12)),
+            gTeeth2    = math.max(4, math.floor(tonumber(BInput.bGearTeeth2 and BInput.bGearTeeth2.Text) or 8)),
+            gTeeth3    = math.max(4, math.floor(tonumber(BInput.bGearTeeth3 and BInput.bGearTeeth3.Text) or 6)),
+            gRadius1   = math.max(2, tonumber(BInput.bGearRadius and BInput.bGearRadius.Text) or 10),
+            gToothLen  = math.max(0.5, tonumber(BInput.bGearToothLen and BInput.bGearToothLen.Text) or 3),
+            gThick     = math.max(0.5, tonumber(BInput.bGearThick and BInput.bGearThick.Text) or 4),
+            gToothWidth= math.clamp(tonumber(BInput.bGearToothW and BInput.bGearToothW.Text) or 0.5,0.1,0.85),
+            gType      = BInput.gTypeValue or "recto",
+            gHelixAngle= math.clamp(tonumber(BInput.bHelixAng and BInput.bHelixAng.Text) or 20,5,60),
+            gBevelAngle= math.clamp(tonumber(BInput.bBevelAng and BInput.bBevelAng.Text) or 20,5,55),
         }
     end
 
@@ -397,6 +701,9 @@ function FormasModule.init(ENV)
         return bx
     end
 
+    -- ─────────────────────────────────────────────────────────────────────────
+    --  UI ROWS
+    -- ─────────────────────────────────────────────────────────────────────────
     local shapeBtns={}; local shapeIcons={}; local onShapeChange
     local function rfS()
         for i,b in ipairs(shapeBtns) do
@@ -406,6 +713,7 @@ function FormasModule.init(ENV)
         end
     end
 
+    -- Shapes grid
     do
         local rGrid=bRow(90)
         mk("UIGridLayout",rGrid,{CellSize=UDim2.new(0,38,0,38),CellPadding=UDim2.new(0,6,0,6),SortOrder=Enum.SortOrder.LayoutOrder})
@@ -422,6 +730,7 @@ function FormasModule.init(ENV)
         end
     end
 
+    -- Parámetros originales (texto, radio, etc.)
     do
         local rTxt=bRow(24, function() local d=SHAPES[sS]; return d and d.kind=="text" end)
         lbl(rTxt, "Texto", UDim2.new(0,72,1,0), UDim2.new(0,0,0,0), T.sub)
@@ -438,25 +747,141 @@ function FormasModule.init(ENV)
         txtBox.FocusLost:Connect(function() mPv() end)
         txtBox:GetPropertyChangedSignal("Text"):Connect(mPv)
 
-        local rRad=bRow(24, function() local d=SHAPES[sS]; return d and d.kind~="text" end); BInput.bRadius=mkNumRow(rRad,"Radio","20",1,0.01)
-        local rCnt=bRow(24,function() local d=SHAPES[sS]; return d and d.useCount~=false end); BInput.bSteps=mkNumRow(rCnt,"Parts","120",4,4)
-        local rHgt=bRow(24,function() local d=SHAPES[sS]; return d and d.useHeight==true end); BInput.bSizeY=mkNumRow(rHgt,"Altura","8",1,0.01)
-        local rThk=bRow(24); BInput.bThick=mkNumRow(rThk,"Grosor","1",0.1,0.001)
+        local rRad=bRow(24, function() local d=SHAPES[sS]; return d and d.kind~="text" and d.kind~="gear" end); BInput.bRadius=mkNumRow(rRad,"Radio","20",1,0.01)
+        local rCnt=bRow(24,function() local d=SHAPES[sS]; return d and d.useCount~=false and d.kind~="gear" end); BInput.bSteps=mkNumRow(rCnt,"Parts","120",4,4)
+        local rHgt=bRow(24,function() local d=SHAPES[sS]; return d and d.useHeight==true and d.kind~="gear" end); BInput.bSizeY=mkNumRow(rHgt,"Altura","8",1,0.01)
+        local rThk=bRow(24,function() local d=SHAPES[sS]; return d and d.kind~="gear" end); BInput.bThick=mkNumRow(rThk,"Grosor","1",0.1,0.001)
         local rPnt=bRow(24,function() local d=SHAPES[sS]; return d and d.usePoint==true end); BInput.bPunta=mkNumRow(rPnt,"Punta","0",0.1,0)
 
         local rTxtW=bRow(24, function() local d=SHAPES[sS]; return d and d.kind=="text" end)
         BInput.bLetterWidth=mkNumRow(rTxtW, "Ancho L.", "1", 0.1, 0.1)
-
         local rTxtH=bRow(24, function() local d=SHAPES[sS]; return d and d.kind=="text" end)
         BInput.bLetterHeight=mkNumRow(rTxtH, "Alto L.", "1", 0.1, 0.1)
-
         local rTxtS=bRow(24, function() local d=SHAPES[sS]; return d and d.kind=="text" end)
         BInput.bLetterSpace=mkNumRow(rTxtS, "Espacio", "1", 0.1, 0)
-
         local rTxtB=bRow(24, function() local d=SHAPES[sS]; return d and d.kind=="text" end)
         BInput.bOverallSize=mkNumRow(rTxtB, "Tam. Bloq", "1", 0.1, 0.1)
     end
 
+    -- ── PARÁMETROS DE ENGRANAJE ──────────────────────────────────────────────
+    do
+        local function isGear() local d=SHAPES[sS]; return d and d.kind=="gear" end
+
+        -- Cantidad de engranajes
+        local rGC = bRow(24, isGear)
+        BInput.bGearCount = mkNumRow(rGC, "Cant. eng.", "1", 1, 1)
+
+        -- Radio del engranaje 1
+        local rGR = bRow(24, isGear)
+        BInput.bGearRadius = mkNumRow(rGR, "Radio 1", "10", 1, 2)
+
+        -- Dientes engranaje 1
+        local rGT1 = bRow(24, isGear)
+        BInput.bGearTeeth1 = mkNumRow(rGT1, "Dientes 1", "12", 1, 4)
+
+        -- Dientes engranaje 2 (visible si count >= 2)
+        local rGT2 = bRow(24, function()
+            if not isGear() then return false end
+            local c = math.clamp(math.floor(tonumber(BInput.bGearCount and BInput.bGearCount.Text) or 1),1,3)
+            return c >= 2
+        end)
+        BInput.bGearTeeth2 = mkNumRow(rGT2, "Dientes 2", "8", 1, 4)
+
+        -- Dientes engranaje 3 (visible si count >= 3)
+        local rGT3 = bRow(24, function()
+            if not isGear() then return false end
+            local c = math.clamp(math.floor(tonumber(BInput.bGearCount and BInput.bGearCount.Text) or 1),1,3)
+            return c >= 3
+        end)
+        BInput.bGearTeeth3 = mkNumRow(rGT3, "Dientes 3", "6", 1, 4)
+
+        -- Largo del diente (addendum total)
+        local rGTL = bRow(24, isGear)
+        BInput.bGearToothLen = mkNumRow(rGTL, "Largo diente", "3", 0.5, 0.5)
+
+        -- Grosor axial
+        local rGTK = bRow(24, isGear)
+        BInput.bGearThick = mkNumRow(rGTK, "Grosor", "4", 0.5, 0.5)
+
+        -- Ancho del diente (fracción 0.1–0.85)
+        local rGTW = bRow(24, isGear)
+        BInput.bGearToothW = mkNumRow(rGTW, "Ancho diente", "0.5", 0.05, 0.1)
+
+        -- Tipo de engranaje (selector de botones)
+        local rGType = bRow(28, isGear)
+        lbl(rGType, "Tipo", UDim2.new(0,38,1,0), UDim2.new(0,0,0,0), T.sub)
+
+        local gTypeNames = {"Recto","Helicoidal","Bevel","Corona"}
+        local gTypeValues = {"recto","helicoidal","bevel","corona"}
+        local gTypeBtns = {}
+        BInput.gTypeValue = "recto"
+
+        local typeGridW = UDim2.new(1,-42,0,24)
+        local typeGridF = mk("Frame", rGType, {
+            Size = typeGridW,
+            Position = UDim2.new(0,42,0,2),
+            BackgroundTransparency = 1,
+        })
+        mk("UIGridLayout", typeGridF, {
+            CellSize = UDim2.new(0.25,-2,1,0),
+            CellPadding = UDim2.new(0,2,0,0),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        })
+
+        local function rfGType()
+            for i,b in ipairs(gTypeBtns) do
+                local sel = (gTypeValues[i] == BInput.gTypeValue)
+                b.BackgroundColor3 = sel and WHITE or T.btnAlt
+                b.TextColor3       = sel and BLACK or T.text
+            end
+            mPv()
+        end
+
+        for i,nm in ipairs(gTypeNames) do
+            local b = mk("TextButton", typeGridF, {
+                Text = nm,
+                BackgroundColor3 = T.btnAlt,
+                TextColor3 = T.text,
+                Font = Enum.Font.GothamBold,
+                TextSize = 9,
+                BorderSizePixel = 0,
+                LayoutOrder = i,
+                AutoButtonColor = false,
+            })
+            corner(b, 4)
+            gTypeBtns[i] = b
+            b.MouseButton1Click:Connect(function()
+                BInput.gTypeValue = gTypeValues[i]
+                rfGType()
+                refreshBuildRows()
+            end)
+        end
+        rfGType()
+
+        -- Ángulo hélice (sólo helicoidal)
+        local rHelixA = bRow(24, function()
+            return isGear() and BInput.gTypeValue == "helicoidal"
+        end)
+        BInput.bHelixAng = mkNumRow(rHelixA, "Ángulo hélice", "20", 5, 5)
+
+        -- Ángulo bevel (sólo bevel)
+        local rBevelA = bRow(24, function()
+            return isGear() and BInput.gTypeValue == "bevel"
+        end)
+        BInput.bBevelAng = mkNumRow(rBevelA, "Ángulo bevel", "20", 5, 5)
+
+        -- Conectar cambios de cantidad para refrescar visibilidad
+        if BInput.bGearCount then
+            BInput.bGearCount:GetPropertyChangedSignal("Text"):Connect(function()
+                refreshBuildRows()
+                mPv()
+            end)
+        end
+    end
+
+    -- ─────────────────────────────────────────────────────────────────────────
+    --  TAPAS (caps)
+    -- ─────────────────────────────────────────────────────────────────────────
     local cBT,cBB
     local function rfC()
         local def=SHAPES[sS]
@@ -484,6 +909,7 @@ function FormasModule.init(ENV)
         cBB.MouseButton1Click:Connect(function() cBO=not cBO; rfC(); mPv() end)
     end
 
+    -- Relleno
     local fSB,fGB
     local function rfF()
         fSB.BackgroundColor3=(cFM=="strips") and WHITE or T.btnAlt
@@ -501,6 +927,7 @@ function FormasModule.init(ENV)
         fGB.MouseButton1Click:Connect(function() cFM="grid"; rfF(); mPv() end)
     end
 
+    -- Material picker
     local sBNRef={value="PlasticBlock"}
     local matPickOv,matPickBtn,mLabelRef,mIconRef
 
@@ -578,6 +1005,9 @@ function FormasModule.init(ENV)
         end)
     end
 
+    -- ─────────────────────────────────────────────────────────────────────────
+    --  HANDLES / ARC
+    -- ─────────────────────────────────────────────────────────────────────────
     local PURPLE_GAMER=Color3.fromRGB(170,0,255)
     local Handles=mk("Handles",SG,{Adornee=cDummy,Style=Enum.HandlesStyle.Movement,Color3=PURPLE_GAMER,Visible=false})
     pcall(function() Handles.AlwaysOnTop=true end)
@@ -704,6 +1134,9 @@ function FormasModule.init(ENV)
     end)
     PB:GetPropertyChangedSignal("Visible"):Connect(function() if PB.Visible and needsRecenter then needsRecenter=false; waitAndRecenter() end end)
 
+    -- ─────────────────────────────────────────────────────────────────────────
+    --  DRAG / ARC
+    -- ─────────────────────────────────────────────────────────────────────────
     do
         local drag2,savedCam,origDP,origBaseCPos=false,nil,nil,nil
         Handles.MouseButton1Down:Connect(function()
@@ -742,6 +1175,9 @@ function FormasModule.init(ENV)
         end)
     end
 
+    -- ─────────────────────────────────────────────────────────────────────────
+    --  PREVIEW
+    -- ─────────────────────────────────────────────────────────────────────────
     local pp={}
     local function hPv() for _,p in ipairs(pp) do p.Transparency=1; p.Size=Vector3.new(0.05,0.05,0.05) end end
     local function rnP(plan)
@@ -770,9 +1206,13 @@ function FormasModule.init(ENV)
     end
     RunService.Heartbeat:Connect(function() if pD then pD=false; dPv() end end)
 
+    -- ─────────────────────────────────────────────────────────────────────────
+    --  onShapeChange
+    -- ─────────────────────────────────────────────────────────────────────────
     onShapeChange=function()
         local def=SHAPES[sS]; if not def then return end
         if def.kind=="cube3d" then cTO=true; cBO=true
+        elseif def.kind=="gear" then cTO=false; cBO=false
         elseif def.caps=="bottom" then cTO=false; cBO=true
         else cTO=false; cBO=false end
 
@@ -801,6 +1241,9 @@ function FormasModule.init(ENV)
         mPv()
     end)
 
+    -- ─────────────────────────────────────────────────────────────────────────
+    --  BUILD SYSTEM (sin cambios)
+    -- ─────────────────────────────────────────────────────────────────────────
     local blockQueue={}; local blockConn=nil
     local function hookFolder(folder) if blockConn then blockConn:Disconnect(); blockConn=nil end; blockQueue={}; if folder then blockConn=folder.ChildAdded:Connect(function(c) blockQueue[#blockQueue+1]=c end) end end
     local function popBlock(timeout)
@@ -828,7 +1271,6 @@ function FormasModule.init(ENV)
             local folder=userFolder(LP.Name); hookFolder(folder)
             local placed=0; local pBl={}
 
-            -- ── Rate-limiter: 255 bloques/segundo ──────────────────────────
             local TARGET_BPS  = 255
             local nextSlot    = tick()
             local function waitForSlot()
@@ -836,7 +1278,6 @@ function FormasModule.init(ENV)
                 if now < nextSlot then task.wait(nextSlot - now) end
                 nextSlot = math.max(nextSlot, tick()) + 1 / TARGET_BPS
             end
-            -- ───────────────────────────────────────────────────────────────
 
             local function placeOne(seg)
                 local ret=bRF:InvokeServer(sBN,invItem.Value,nil,seg.cframe,true,seg.cframe,false)
@@ -855,7 +1296,7 @@ function FormasModule.init(ENV)
                     if invItem.Value<=0 then break end
                     local i=nextIdx; nextIdx=nextIdx+1; if i>total then break end
                     if not folder or folder.Parent==nil then folder=userFolder(LP.Name); hookFolder(folder) end
-                    waitForSlot()                   -- espera el slot de 1/255 s
+                    waitForSlot()
                     local blk=placeOne(plan[i])
                     if blk then placed=placed+1; pBl[#pBl+1]=blk end
                 end
