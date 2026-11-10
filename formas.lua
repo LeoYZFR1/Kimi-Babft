@@ -501,6 +501,264 @@ function FormasModule.init(ENV)
             end
         end
 
+        -- ═══════════════════════════════════════════════════════════════════════
+        --  RUEDA DE AUTO
+        -- ═══════════════════════════════════════════════════════════════════════
+        --[[
+            La rueda gira alrededor del eje X (ancho del auto).
+            Todos los bloques se colocan en el plano YZ con X = profundidad/grosor.
+
+            ESTRUCTURA (mínimo de bloques, todos estirados):
+              1. HUB CENTRAL    – 1 bloque fino (0.2×hubD×hubD) en el centro,
+                                  orientado en X → el girador se pone ahí directo.
+              2. RADIOS/RIM     – N bloques radiales, uno por radio.
+                                  Llanta sólida: 1 capa de bloques tipo "cuña" que
+                                  cubre todo el disco desde el hub hasta el borde.
+                                  Llanta con radios: N bloques delgados radiales +
+                                  anillo exterior.
+              3. ARO EXTERIOR   – anillo de bloques cubriendo el borde de la llanta.
+              4. PERFIL LATERAL – 2 anillos (lado interno y externo) del neumático.
+              5. BANDA RODADURA – anillo exterior del neumático con el dibujo elegido.
+
+            Coordenadas:
+              • El centro de la rueda es (cx, cy, cz).
+              • El eje de rotación es X → el bloque hub tiene size=(hubThick, hubD, hubD).
+              • Los radios/disco van en el plano YZ centrado en X=0.
+              • Cuando se coloca en el mundo, el centro queda en cP y se puede rotar.
+
+            Parámetros en P:
+              wRadius     – radio exterior del neumático
+              wWidth      – ancho total de la rueda (eje X)
+              wWallThick  – grosor de la pared del neumático (entre aro y goma)
+              wRimStyle   – "solido"|"5radios"|"6radios"|"8radios"|"multirayo"|"turbina"
+              wTreadStyle – "liso"|"bloques"|"rally"|"off-road"|"chevron"
+              wRimThick   – grosor axial del aro (parte metálica)
+        ]]
+
+        -- helper: coloca un bloque orientado radialmente en el plano YZ
+        -- el eje X es la profundidad axial de la rueda
+        -- ang = ángulo en YZ (0 = +Y, gira en sentido antihorario visto desde +X)
+        local function wRadialBlock(plan, cx, cy, cz, ang, rMid, radLen, arcLen, axThick)
+            local cosA = math.cos(ang)
+            local sinA = math.sin(ang)
+            -- posición: X=centro, Y y Z desde el ángulo
+            local by = cy + rMid * cosA
+            local bz = cz + rMid * sinA
+            -- CFrame: right=X, up=radial outward, back=tangente
+            local up    = Vector3.new(0, cosA, sinA)   -- radial outward en YZ
+            local right = Vector3.new(1, 0, 0)         -- eje X (axial)
+            local back  = right:Cross(up).Unit         -- tangente en YZ
+            -- size: X=axThick (ancho axial), Y=radLen (radial), Z=arcLen (tangencial)
+            plan[#plan+1] = {
+                cframe = CFrame.fromMatrix(Vector3.new(cx, by, bz), right, up),
+                size   = Vector3.new(axThick, radLen, arcLen),
+            }
+        end
+
+        -- helper: anillo completo de N bloques en el plano YZ a radio r, ancho axThick
+        local function wRing(plan, cx, cy, cz, r, axThick, N, radLen)
+            radLen = radLen or 0.4
+            local TAU = math.pi * 2
+            local arcLen = (TAU * r / N) * 1.04
+            for i = 0, N-1 do
+                wRadialBlock(plan, cx, cy, cz, (i+0.5)*(TAU/N), r, radLen, arcLen, axThick)
+            end
+        end
+
+        local function buildWheel(plan, cx, cy, cz, P)
+            local wR        = math.max(2,   P.wRadius    or 12)   -- radio exterior goma
+            local wW        = math.max(1,   P.wWidth     or 6)    -- ancho total rueda
+            local wallT     = math.max(0.5, P.wWallThick or 2.5)  -- altura del perfil goma
+            local rimStyle  = P.wRimStyle   or "5radios"
+            local treadStyle= P.wTreadStyle or "bloques"
+            local rimThick  = math.max(0.3, P.wRimThick  or 0.5)  -- grosor cara lateral aro
+
+            local rimR      = wR - wallT            -- radio exterior del aro (llanta)
+            local hubR      = math.max(0.8, rimR * 0.18)  -- radio del cubo central
+            local TAU       = math.pi * 2
+
+            -- N de segmentos base para anillos (impar=peor para simetría, forzar par)
+            local N = 32  -- base; suficiente para suavidad visual
+
+            -- ── 1. HUB CENTRAL ──────────────────────────────────────────────
+            -- Bloque único, muy fino en X, cuadrado en YZ.
+            -- Este es el punto de conexión del girador.
+            local hubD     = hubR * 2
+            local hubThick = math.max(0.1, wW * 0.12)   -- muy delgado axialmente
+            plan[#plan+1] = {
+                cframe = CFrame.new(cx, cy, cz),
+                size   = Vector3.new(hubThick, hubD, hubD),
+            }
+
+            -- ── 2. LLANTA (RIM) ─────────────────────────────────────────────
+            -- Profundidad axial del aro: ocupa casi todo el ancho interior
+            local rimAxW = wW - wallT * 0.4   -- deja un poco para el perfil lateral
+            if rimAxW < 0.5 then rimAxW = 0.5 end
+
+            if rimStyle == "solido" then
+                -- Disco sólido: N cuñas radiales desde hub hasta rimR
+                local bodyRMid  = (hubR + rimR) * 0.5
+                local bodyRadLen= (rimR - hubR) * 1.02
+                local bodyArcLen= (TAU * bodyRMid / N) * 1.04
+                for i = 0, N-1 do
+                    wRadialBlock(plan, cx, cy, cz, (i+0.5)*(TAU/N), bodyRMid, bodyRadLen, bodyArcLen, rimAxW)
+                end
+
+            elseif rimStyle == "multirayo" then
+                -- Muchos radios delgados (como rayos de bicicleta), 16 radios
+                local nSpokes = 16
+                local spokeW  = (TAU * rimR / N) * 0.18
+                local spokeMid= (hubR + rimR) * 0.5
+                local spokeLen= (rimR - hubR) * 1.02
+                for i = 0, nSpokes-1 do
+                    wRadialBlock(plan, cx, cy, cz, i*(TAU/nSpokes), spokeMid, spokeLen, spokeW, rimAxW)
+                end
+                -- anillo interno del hub
+                wRing(plan, cx, cy, cz, hubR * 1.5, rimAxW, 16, rimR*0.08)
+                -- anillo exterior del aro
+                wRing(plan, cx, cy, cz, rimR, rimAxW, N, rimThick)
+
+            elseif rimStyle == "turbina" then
+                -- Aspas curvas: 7 aspas, cada una representada por 2 bloques con ángulo
+                local nBlades = 7
+                local bladeW  = (TAU * rimR / N) * 0.4
+                local bladeMid= (hubR * 1.4 + rimR) * 0.5
+                local bladeLen= (rimR - hubR * 1.4) * 1.02
+                for i = 0, nBlades-1 do
+                    local baseAng = i * (TAU / nBlades)
+                    -- bloque principal del aspa
+                    wRadialBlock(plan, cx, cy, cz, baseAng, bladeMid, bladeLen, bladeW, rimAxW)
+                    -- bloque offset para simular curvatura
+                    wRadialBlock(plan, cx, cy, cz, baseAng + 0.18, bladeMid * 0.78, bladeLen * 0.5, bladeW * 0.7, rimAxW)
+                end
+                wRing(plan, cx, cy, cz, hubR * 1.3, rimAxW, nBlades * 2, rimR * 0.07)
+                wRing(plan, cx, cy, cz, rimR, rimAxW, N, rimThick)
+
+            else
+                -- Radios: 5, 6 u 8 radios dobles (cada radio = 2 bloques paralelos)
+                local nSpokes = 5
+                if rimStyle == "6radios" then nSpokes = 6
+                elseif rimStyle == "8radios" then nSpokes = 8 end
+
+                local spokeW     = math.max(0.6, (TAU * (hubR + rimR)*0.5 / (nSpokes * 2)) * 0.55)
+                local spokeMidR  = (hubR * 1.1 + rimR) * 0.5
+                local spokeRadL  = (rimR - hubR * 1.1) * 1.02
+                local spokeSep   = spokeW * 0.55   -- separación lateral entre el par
+
+                for i = 0, nSpokes - 1 do
+                    local ang = i * (TAU / nSpokes)
+                    -- par de radios
+                    plan[#plan+1] = {
+                        cframe = CFrame.new(cx + rimAxW*0.25,  cy + spokeMidR*math.cos(ang),  cz + spokeMidR*math.sin(ang)),
+                        size   = Vector3.new(rimAxW * 0.45, spokeRadL, spokeW),
+                    }
+                    plan[#plan+1] = {
+                        cframe = CFrame.new(cx - rimAxW*0.25,  cy + spokeMidR*math.cos(ang),  cz + spokeMidR*math.sin(ang)),
+                        size   = Vector3.new(rimAxW * 0.45, spokeRadL, spokeW),
+                    }
+                end
+
+                -- Anillo central del hub
+                wRing(plan, cx, cy, cz, hubR * 1.4, rimAxW, 16, rimR * 0.08)
+                -- Cara lateral exterior del aro (el "plato" que se ve de lado)
+                wRing(plan, cx, cy, cz, rimR * 0.65, rimThick, 24, rimR * 0.65)
+                -- Aro exterior
+                wRing(plan, cx, cy, cz, rimR, rimAxW, N, rimThick)
+            end
+
+            -- ── 3. PERFIL LATERAL DEL NEUMÁTICO ─────────────────────────────
+            -- Dos anillos que forman las paredes laterales de la goma
+            local sideThick = wallT * 0.55   -- grosor axial de cada pared lateral
+            local sideRMid  = (rimR + wR) * 0.5
+            local sideRadL  = wallT * 1.02
+            local xSideOut  = wW * 0.5 - sideThick * 0.5   -- posición X pared exterior
+            local xSideIn   = -(wW * 0.5 - sideThick * 0.5) -- posición X pared interior
+
+            wRing(plan, cx + xSideOut, cy, cz, sideRMid, sideThick, N, sideRadL)
+            wRing(plan, cx + xSideIn,  cy, cz, sideRMid, sideThick, N, sideRadL)
+
+            -- ── 4. BANDA DE RODADURA ────────────────────────────────────────
+            -- Ancho disponible para la banda: entre las dos paredes laterales
+            local bandW     = wW - sideThick * 2 - 0.1
+            local treadH    = 0.4   -- altura de los bloques de dibujo sobre el anillo base
+            local treadN    = N     -- segmentos angulares de la banda
+
+            -- Anillo base de la banda (la goma plana)
+            local baseThick = bandW
+            wRing(plan, cx, cy, cz, wR - treadH * 0.5, baseThick, treadN, treadH)
+
+            -- Dibujo encima según treadStyle
+            if treadStyle == "liso" then
+                -- sin dibujo, ya está el anillo base
+
+            elseif treadStyle == "bloques" then
+                -- Bloques rectangulares en 2 filas
+                local nBlocks = 12
+                local blockArcLen = (TAU * wR / nBlocks) * 0.55
+                local blockRadL   = treadH * 1.5
+                local rowOffset   = bandW * 0.22
+                for i = 0, nBlocks - 1 do
+                    local ang = (i + 0.5) * (TAU / nBlocks)
+                    -- fila exterior
+                    plan[#plan+1] = {
+                        cframe = CFrame.new(cx + rowOffset, cy + wR*math.cos(ang), cz + wR*math.sin(ang)),
+                        size   = Vector3.new(bandW * 0.38, blockRadL, blockArcLen),
+                    }
+                    -- fila interior, desfasada medio bloque
+                    local ang2 = ang + (TAU / nBlocks) * 0.5
+                    plan[#plan+1] = {
+                        cframe = CFrame.new(cx - rowOffset, cy + wR*math.cos(ang2), cz + wR*math.sin(ang2)),
+                        size   = Vector3.new(bandW * 0.38, blockRadL, blockArcLen),
+                    }
+                end
+
+            elseif treadStyle == "rally" then
+                -- Ranuras longitudinales continuas (3 anillos): el clásico de asfalto
+                for _, xOff in ipairs({0, bandW*0.28, -bandW*0.28}) do
+                    wRing(plan, cx + xOff, cy, cz, wR, bandW * 0.12, treadN, treadH * 1.4)
+                end
+
+            elseif treadStyle == "off-road" then
+                -- Tacos grandes muy separados en 2 filas alternas
+                local nLugs  = 8
+                local lugArc = (TAU * wR / nLugs) * 0.45
+                local lugRad = treadH * 2.0
+                local xA     =  bandW * 0.2
+                local xB     = -bandW * 0.2
+                for i = 0, nLugs - 1 do
+                    local ang  = (i + 0.5) * (TAU / nLugs)
+                    local ang2 = ang + (TAU / nLugs) * 0.5
+                    plan[#plan+1] = {
+                        cframe = CFrame.new(cx + xA, cy + wR*math.cos(ang), cz + wR*math.sin(ang)),
+                        size   = Vector3.new(bandW * 0.45, lugRad, lugArc),
+                    }
+                    plan[#plan+1] = {
+                        cframe = CFrame.new(cx + xB, cy + wR*math.cos(ang2), cz + wR*math.sin(ang2)),
+                        size   = Vector3.new(bandW * 0.45, lugRad, lugArc),
+                    }
+                end
+
+            elseif treadStyle == "chevron" then
+                -- Patrón en V: bloques en ángulo (un bloque izquierdo + uno derecho por V)
+                local nV    = 10
+                local vArc  = (TAU * wR / nV) * 0.38
+                local vRad  = treadH * 1.6
+                for i = 0, nV - 1 do
+                    local ang = (i + 0.5) * (TAU / nV)
+                    -- rama izquierda: ligeramente adelantada
+                    plan[#plan+1] = {
+                        cframe = CFrame.new(cx + bandW*0.2, cy + wR*math.cos(ang + 0.12), cz + wR*math.sin(ang + 0.12)),
+                        size   = Vector3.new(bandW * 0.35, vRad, vArc),
+                    }
+                    -- rama derecha: ligeramente retrasada
+                    plan[#plan+1] = {
+                        cframe = CFrame.new(cx - bandW*0.2, cy + wR*math.cos(ang - 0.12), cz + wR*math.sin(ang - 0.12)),
+                        size   = Vector3.new(bandW * 0.35, vRad, vArc),
+                    }
+                end
+            end
+        end
+
         -- ── SHAPES TABLE ────────────────────────────────────────────────────
         SHAPES={
             {label="Circulo",   icon="circle",  kind="extrude",  pts=function() return circPts(96) end, caps="both",   fillable=true,  useHeight=true,  useCount=true,  usePoint=false, yOffset=3},
@@ -512,6 +770,7 @@ function FormasModule.init(ENV)
             {label="Capsula",   icon="capsule", kind="capsule",  caps=false,    fillable=false, useHeight=true,  useCount=true,  usePoint=true,  pointy=true, yOffset=24},
             {label="Texto",     icon="text",    kind="text",     caps=false,    fillable=false, useHeight=false, useCount=false, usePoint=false, yOffset=2, rot=CFrame.Angles(0,math.rad(-90),0)},
             {label="Engranaje", icon="gear",    kind="gear",     caps=false,    fillable=false, useHeight=false, useCount=false, usePoint=false, yOffset=10},
+            {label="Rueda",     icon="wheel",   kind="wheel",    caps=false,    fillable=false, useHeight=false, useCount=false, usePoint=false, yOffset=12},
         }
 
         gS=function(def,cp,P)
@@ -524,6 +783,7 @@ function FormasModule.init(ENV)
             elseif k=="capsule"  then buildCapsule(plan,cx,cy,cz,P.radius,P.height,P.thick,P.count,P.point)
             elseif k=="text"     then buildText(plan,cx,cy,cz,P)
             elseif k=="gear"     then buildGearSet(plan,cx,cy,cz,P)
+            elseif k=="wheel"    then buildWheel(plan,cx,cy,cz,P)
             end
             if hR then local pivot=CFrame.new(cx,cy,cz); local rot=pivot*sR*pivot:Inverse(); for _,s in ipairs(plan) do s.cframe=rot*s.cframe end end
             return plan
@@ -559,9 +819,7 @@ function FormasModule.init(ENV)
                 mk("TextLabel",container,{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="abc",TextColor3=col,Font=Enum.Font.GothamBold,TextSize=bsz*0.45})
             elseif ic=="gear" then
                 local innerR=R*0.38; local outerR=R*0.88; local nT=8
-                -- anillo interior
                 local ring=mk("Frame",container,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(innerR*2,innerR*2),BackgroundTransparency=1}); corner(ring,999); mk("UIStroke",ring,{Color=col,Thickness=1.5,ApplyStrokeMode=Enum.ApplyStrokeMode.Border})
-                -- dientes
                 local step=math.pi*2/nT; local toothW=step*0.4
                 for i=0,nT-1 do
                     local a1=i*step; local a2=a1+toothW
@@ -571,8 +829,23 @@ function FormasModule.init(ENV)
                     local ix2=cx2+innerR*1.08*math.cos(a2); local iy2=cy2+innerR*1.08*math.sin(a2)
                     dLine(container,ix1,iy1,ox1,oy1,col); dLine(container,ox1,oy1,ox2,oy2,col); dLine(container,ox2,oy2,ix2,iy2,col)
                 end
-                -- hub
                 local hub=mk("Frame",container,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(R*0.18,R*0.18),BackgroundColor3=col,BorderSizePixel=0}); corner(hub,999)
+            elseif ic=="wheel" then
+                -- neumático (círculo exterior grueso)
+                local tireR = R*0.92; local rimR2 = R*0.60
+                local tireRing=mk("Frame",container,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(tireR*2,tireR*2),BackgroundTransparency=1}); corner(tireRing,999)
+                local tireStroke=mk("UIStroke",tireRing,{Color=col,Thickness=5,ApplyStrokeMode=Enum.ApplyStrokeMode.Border})
+                -- llanta interior
+                local rimRing=mk("Frame",container,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(rimR2*2,rimR2*2),BackgroundTransparency=1}); corner(rimRing,999); mk("UIStroke",rimRing,{Color=col,Thickness=1.5,ApplyStrokeMode=Enum.ApplyStrokeMode.Border})
+                -- 5 radios
+                for i=0,4 do
+                    local a=(i/5)*math.pi*2
+                    local hx=cx2+R*0.12*math.cos(a); local hy=cy2+R*0.12*math.sin(a)
+                    local rx=cx2+rimR2*0.9*math.cos(a); local ry=cy2+rimR2*0.9*math.sin(a)
+                    dLine(container,hx,hy,rx,ry,col)
+                end
+                -- hub central
+                local hub2=mk("Frame",container,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(R*0.14,R*0.14),BackgroundColor3=col,BorderSizePixel=0}); corner(hub2,999)
             end
         end
     end
@@ -593,6 +866,13 @@ function FormasModule.init(ENV)
             letterWidth=math.max(0.1,tonumber(BInput.bLetterWidth and BInput.bLetterWidth.Text) or 1),
             letterHeight=math.max(0.1,tonumber(BInput.bLetterHeight and BInput.bLetterHeight.Text) or 1),
             letterSpacing=math.max(0,tonumber(BInput.bLetterSpace and BInput.bLetterSpace.Text) or 1),
+            -- Wheel
+            wRadius    = math.max(2,   tonumber(BInput.bWheelRadius and BInput.bWheelRadius.Text) or 12),
+            wWidth     = math.max(1,   tonumber(BInput.bWheelWidth  and BInput.bWheelWidth.Text)  or 6),
+            wWallThick = math.max(0.5, tonumber(BInput.bWheelWall   and BInput.bWheelWall.Text)   or 2.5),
+            wRimThick  = math.max(0.2, tonumber(BInput.bWheelRimThk and BInput.bWheelRimThk.Text) or 0.5),
+            wRimStyle  = BInput.wRimStyleValue  or "5radios",
+            wTreadStyle= BInput.wTreadStyleValue or "bloques",
             -- Gear
             gCount     = math.clamp(math.floor(tonumber(BInput.bGearCount  and BInput.bGearCount.Text)  or 1),1,3),
             gTeeth1    = math.max(4, math.floor(tonumber(BInput.bGearTeeth1 and BInput.bGearTeeth1.Text) or 12)),
@@ -753,6 +1033,61 @@ function FormasModule.init(ENV)
         if BInput.bGearCount then
             BInput.bGearCount:GetPropertyChangedSignal("Text"):Connect(function() refreshBuildRows(); mPv() end)
         end
+    end
+
+    -- ── PARÁMETROS DE RUEDA ──────────────────────────────────────────────────
+    do
+        local function isWheel() local d=SHAPES[sS]; return d and d.kind=="wheel" end
+
+        -- Medidas
+        local rWR  = bRow(24, isWheel); BInput.bWheelRadius = mkNumRow(rWR,  "Radio",       "12",  1,   2)
+        local rWW  = bRow(24, isWheel); BInput.bWheelWidth  = mkNumRow(rWW,  "Ancho",       "6",   0.5, 1)
+        local rWWT = bRow(24, isWheel); BInput.bWheelWall   = mkNumRow(rWWT, "Perf. goma",  "2.5", 0.5, 0.5)
+        local rWRT = bRow(24, isWheel); BInput.bWheelRimThk = mkNumRow(rWRT, "Grosor aro",  "0.5", 0.1, 0.2)
+
+        -- Selector estilo de llanta
+        local rRimSt = bRow(60, isWheel)   -- más alto para caber 2 filas de botones
+        lbl(rRimSt, "Llanta", UDim2.new(0,42,0,20), UDim2.new(0,0,0,0), T.sub)
+        local rimNames  = {"Sólido","5 Radios","6 Radios","8 Radios","Multirayo","Turbina"}
+        local rimValues = {"solido","5radios","6radios","8radios","multirayo","turbina"}
+        local rimBtns   = {}
+        BInput.wRimStyleValue = "5radios"
+        local rimGrid = mk("Frame", rRimSt, {
+            Size=UDim2.new(1,0,0,40), Position=UDim2.new(0,0,0,20), BackgroundTransparency=1
+        })
+        mk("UIGridLayout", rimGrid, {CellSize=UDim2.new(0.333,-2,0,18), CellPadding=UDim2.new(0,2,0,2), SortOrder=Enum.SortOrder.LayoutOrder})
+        local function rfRimStyle()
+            for i,b in ipairs(rimBtns) do local sel=(rimValues[i]==BInput.wRimStyleValue); b.BackgroundColor3=sel and WHITE or T.btnAlt; b.TextColor3=sel and BLACK or T.text end
+            mPv()
+        end
+        for i,nm in ipairs(rimNames) do
+            local b=mk("TextButton",rimGrid,{Text=nm,BackgroundColor3=T.btnAlt,TextColor3=T.text,Font=Enum.Font.GothamBold,TextSize=8,BorderSizePixel=0,LayoutOrder=i,AutoButtonColor=false}); corner(b,4)
+            rimBtns[i]=b
+            b.MouseButton1Click:Connect(function() BInput.wRimStyleValue=rimValues[i]; rfRimStyle() end)
+        end
+        rfRimStyle()
+
+        -- Selector dibujo de cubierta
+        local rTreadSt = bRow(50, isWheel)
+        lbl(rTreadSt, "Cubierta", UDim2.new(0,52,0,20), UDim2.new(0,0,0,0), T.sub)
+        local treadNames  = {"Liso","Bloques","Rally","Off-Road","Chevron"}
+        local treadValues = {"liso","bloques","rally","off-road","chevron"}
+        local treadBtns   = {}
+        BInput.wTreadStyleValue = "bloques"
+        local treadGrid = mk("Frame", rTreadSt, {
+            Size=UDim2.new(1,0,0,30), Position=UDim2.new(0,0,0,20), BackgroundTransparency=1
+        })
+        mk("UIGridLayout", treadGrid, {CellSize=UDim2.new(0.2,-2,1,-2), CellPadding=UDim2.new(0,2,0,0), SortOrder=Enum.SortOrder.LayoutOrder})
+        local function rfTreadStyle()
+            for i,b in ipairs(treadBtns) do local sel=(treadValues[i]==BInput.wTreadStyleValue); b.BackgroundColor3=sel and WHITE or T.btnAlt; b.TextColor3=sel and BLACK or T.text end
+            mPv()
+        end
+        for i,nm in ipairs(treadNames) do
+            local b=mk("TextButton",treadGrid,{Text=nm,BackgroundColor3=T.btnAlt,TextColor3=T.text,Font=Enum.Font.GothamBold,TextSize=8,BorderSizePixel=0,LayoutOrder=i,AutoButtonColor=false}); corner(b,4)
+            treadBtns[i]=b
+            b.MouseButton1Click:Connect(function() BInput.wTreadStyleValue=treadValues[i]; rfTreadStyle() end)
+        end
+        rfTreadStyle()
     end
 
     -- ── TAPAS ────────────────────────────────────────────────────────────────
@@ -987,7 +1322,7 @@ function FormasModule.init(ENV)
     onShapeChange=function()
         local def=SHAPES[sS]; if not def then return end
         if def.kind=="cube3d" then cTO=true; cBO=true
-        elseif def.kind=="gear" then cTO=false; cBO=false
+        elseif def.kind=="gear" or def.kind=="wheel" then cTO=false; cBO=false
         elseif def.caps=="bottom" then cTO=false; cBO=true
         else cTO=false; cBO=false end
         if def.kind=="pyramid" then cFM="strips"; rfF() end
