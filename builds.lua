@@ -222,6 +222,11 @@ function BuildsModule.init(ENV)
     -- Estado del share automático (se actualiza por polling)
     local autoShare = {active = false, targetPlayer = nil}
 
+    -- Forward declarations (usadas dentro de renderSaveList antes de definirse)
+    local inspCollapsed = true
+    local populateInspector  -- se define más abajo
+    local editCollapsed = true
+
     local PURPLE_GAMER = Color3.fromRGB(170, 0, 255)
     local WHITE = Color3.fromRGB(255,255,255)
     local BLACK = Color3.fromRGB(0,0,0)
@@ -1167,7 +1172,7 @@ function BuildsModule.init(ENV)
     -- ════════════════════════════════════════════════════════════════════════
     local secInspector = sec(PageSave, 5)
     local inspHeaderRow = mk("Frame", secInspector, {Size=UDim2.new(1,0,0,28),BackgroundTransparency=1,LayoutOrder=0})
-    local inspCollapsed = true
+    -- inspCollapsed ya declarado como forward al inicio
     local inspToggleBtn = btn(inspHeaderRow, "▶  Bloques y Colores del Build", UDim2.new(1,0,1,0), nil, T.btnAlt)
     inspToggleBtn.TextSize = 11; inspToggleBtn.Font = Enum.Font.GothamBold
     inspToggleBtn.TextXAlignment = Enum.TextXAlignment.Left
@@ -1196,7 +1201,7 @@ function BuildsModule.init(ENV)
     local inspBtnClearColors = btn(inspColorSection, "Quitar todos los colores", UDim2.new(1,0,0,24), nil, T.btnAlt)
     inspBtnClearColors.TextSize = 9; inspBtnClearColors.LayoutOrder = 3
 
-    local populateInspector  -- forward declare
+    -- populateInspector ya declarado como forward al inicio
 
     inspToggleBtn.MouseButton1Click:Connect(function()
         inspCollapsed = not inspCollapsed
@@ -1490,7 +1495,7 @@ function BuildsModule.init(ENV)
     local secEdit = sec(PageSave, 6)
 
     local editHeaderRow = mk("Frame", secEdit, {Size=UDim2.new(1,0,0,28),BackgroundTransparency=1,LayoutOrder=0})
-    local editCollapsed = true
+    -- editCollapsed ya declarado como forward al inicio
     local editToggleBtn = btn(editHeaderRow, "▶  Editar Build", UDim2.new(1,0,1,0), nil, T.btnAlt)
     editToggleBtn.TextSize = 11; editToggleBtn.Font = Enum.Font.GothamBold
     editToggleBtn.TextXAlignment = Enum.TextXAlignment.Left
