@@ -56,12 +56,11 @@ function BuildsModule.init(ENV)
     local reloadSaves = ENV.reloadSaves
     local GKEY        = ENV.GKEY
     local gbRunningRef = ENV.gbRunning
+    local openCP      = ENV.openCP  -- color picker (igual que formas.lua)
 
-    -- Reemplazo de isLdr usando la ruta de Teams que proporcionaste
     local function isLdr(playerName)
         local p = (playerName and Players:FindFirstChild(playerName)) or LP
         if not p or not p.Team then return false end
-        -- Buscamos el TeamLeader StringValue dentro del equipo del jugador
         local leaderVal = p.Team:FindFirstChild("TeamLeader")
         if leaderVal and leaderVal:IsA("StringValue") then
             return leaderVal.Value == p.Name
@@ -69,7 +68,6 @@ function BuildsModule.init(ENV)
         return false
     end
 
-    -- Reemplazo de isSharing usando la ruta de Settings.ShareBlocks que proporcionaste
     local function isSharing()
         local shareVal = LP:FindFirstChild("Settings") and LP.Settings:FindFirstChild("ShareBlocks")
         if shareVal and shareVal:IsA("BoolValue") then
@@ -110,19 +108,56 @@ function BuildsModule.init(ENV)
     local curDN       = "Yo"
     local curUN       = LP.Name
     local saveBuildState = {running=false, cancel=false}
-    -- Nuevo: Estado del modo compartir
     local isShareModeOn = false
-    -- Nuevo: Estado del alcance de copia (zone o all)
     local copyScope = "zone"
 
     local PURPLE_GAMER = Color3.fromRGB(170, 0, 255)
+    local WHITE = Color3.fromRGB(255,255,255)
+    local BLACK = Color3.fromRGB(0,0,0)
 
+    -- ── Helpers de UI ──────────────────────────────────────────────────────
     local function sec(parent, order)
         local f=mk("Frame",parent,{Size=UDim2.new(1,0,0,1),AutomaticSize=Enum.AutomaticSize.Y,BackgroundColor3=T.card,BorderSizePixel=0,LayoutOrder=order or 0})
         corner(f,8); pad(f,10,10,8,10); mk("UIListLayout",f,{Padding=UDim.new(0,6),SortOrder=Enum.SortOrder.LayoutOrder})
         return f
     end
 
+    -- ── Inventario helper (igual que formas.lua) ───────────────────────────
+    local DEF_IMG = "rbxassetid://12328114032"
+
+    local function getBlockImage(name)
+        local pg = LP:FindFirstChildOfClass("PlayerGui")
+        if pg then
+            local bf = pg:FindFirstChild("BuildGui")
+                and pg.BuildGui:FindFirstChild("InventoryFrame")
+                and pg.BuildGui.InventoryFrame:FindFirstChild("ScrollingFrame")
+                and pg.BuildGui.InventoryFrame.ScrollingFrame:FindFirstChild("BlocksFrame")
+            if bf then
+                local tpl = bf:FindFirstChild(name)
+                if tpl and tpl:IsA("ImageButton") then return tpl.Image end
+            end
+        end
+        return ""
+    end
+
+    local function getPlayerBlocks()
+        -- Devuelve tabla {name, qty, image} de todos los bloques con qty > 0
+        local result = {}
+        local df = LP:FindFirstChild("Data")
+        if not df then return result end
+        for _, item in ipairs(df:GetChildren()) do
+            if item:IsA("ValueBase") and item.Name:sub(-5) == "Block" then
+                local qty = tonumber(item.Value) or 0
+                if qty > 0 then
+                    result[#result+1] = {name=item.Name, qty=qty, image=getBlockImage(item.Name)}
+                end
+            end
+        end
+        table.sort(result, function(a,b) return a.name < b.name end)
+        return result
+    end
+
+    -- ── cCache / getSaveDelta ──────────────────────────────────────────────
     local cCache = {}
     local function buildCenter(sv)
         if not sv or not sv.data or not sv.data.Block or #sv.data.Block==0 then return Vector3.zero end
@@ -144,6 +179,7 @@ function BuildsModule.init(ENV)
         return myRefPos()
     end
 
+    -- ── Handles 3D ────────────────────────────────────────────────────────
     local saveDummy = mk("Part", envF, {Size=Vector3.new(4,4,4),Transparency=1,Anchored=true,CanCollide=false,CanQuery=false,Material=Enum.Material.Plastic,Position=Vector3.new(0,-9999,0)})
     local SaveHandles = mk("Handles", SG, {
         Adornee = saveDummy,
@@ -220,7 +256,7 @@ function BuildsModule.init(ENV)
         RunService.RenderStepped:Connect(function() if sDrag and sSavedCam then Camera.CFrame=sSavedCam end; if sArcDrag and sArcSavedCam then Camera.CFrame=sArcSavedCam end end)
     end
 
-    -- FIX: setWhoBtn se declara ANTES para que buildWhoRow pueda usarlo sin errores
+    -- ── setWhoBtn / refreshWho ─────────────────────────────────────────────
     local function setWhoBtn(uid,dn,un)
         if not whoBtn then return end
         for _,c in ipairs(whoBtn:GetChildren()) do if not c:IsA("UICorner") and not c:IsA("UIStroke") then c:Destroy() end end
@@ -245,29 +281,17 @@ function BuildsModule.init(ENV)
         local function whoMembers()
             local m={}; local allP=Players:GetPlayers()
             local myTeam = LP.Team
-            
-            -- FIX: Ordenamiento jerárquico. Tu equipo primero, luego por líderes y luego por colores.
             table.sort(allP, function(a, b)
                 local aIsMyTeam = (a.Team == myTeam)
                 local bIsMyTeam = (b.Team == myTeam)
-                if aIsMyTeam ~= bIsMyTeam then
-                    return aIsMyTeam
-                end
-                
+                if aIsMyTeam ~= bIsMyTeam then return aIsMyTeam end
                 local aLdr, bLdr = isLdr(a.Name), isLdr(b.Name)
-                if aLdr ~= bLdr then
-                    return aLdr
-                end
-                
+                if aLdr ~= bLdr then return aLdr end
                 local at = a.Team and a.Team.TeamColor.Number or -1
                 local bt = b.Team and b.Team.TeamColor.Number or -1
-                if at ~= bt then
-                    return at < bt
-                end
-                
+                if at ~= bt then return at < bt end
                 return a.Name < b.Name
             end)
-            
             for _,p in ipairs(allP) do if p.Name~=selPlayer then m[#m+1]={uid=p.UserId,dname=p.DisplayName or p.Name,uname=p.Name} end end
             return m
         end
@@ -330,6 +354,7 @@ function BuildsModule.init(ENV)
         end)
     end
 
+    -- ── SECCIÓN SELECCIÓN JUGADOR ──────────────────────────────────────────
     local secSave = sec(PageSave, 3)
     mk("TextLabel",secSave,{Size=UDim2.new(1,0,0,14),Text="Seleccionar jugador",TextColor3=T.sub,BackgroundTransparency=1,Font=Enum.Font.GothamSemibold,TextSize=10,TextXAlignment=Enum.TextXAlignment.Left,LayoutOrder=0})
     local playerRow=mk("Frame",secSave,{Size=UDim2.new(1,0,0,30),BackgroundTransparency=1,LayoutOrder=1})
@@ -343,7 +368,6 @@ function BuildsModule.init(ENV)
         for _,ch in ipairs(whoBtn:GetChildren()) do if ch:IsA("TextLabel")and(ch.Text=="▲"or ch.Text=="▼") then ch.Text=whoVis and"▲"or"▼" end end
     end)
 
-    -- Nuevo: Fila para el botón de Copiar Zona o Todo el Mapa
     local scopeRow=mk("Frame",secSave,{Size=UDim2.new(1,0,0,30),BackgroundTransparency=1,LayoutOrder=2})
     SaveUI.btnScopeMode=btn(scopeRow,"Copiar: Zona",UDim2.new(1,0,0,28),nil,T.accent)
     SaveUI.btnScopeMode.TextSize=10
@@ -379,6 +403,7 @@ function BuildsModule.init(ENV)
     SaveUI.listScroll=mk("ScrollingFrame",secSave,{Size=UDim2.new(1,0,0,20),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=4,ScrollBarImageColor3=T.purple,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new(0,0,0,0),LayoutOrder=6}); pad(SaveUI.listScroll,2,2,2,2)
     SaveUI.listCont=mk("Frame",SaveUI.listScroll,{Size=UDim2.new(1,0,0,1),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1}); mk("UIListLayout",SaveUI.listCont,{Padding=UDim.new(0,4)})
 
+    -- ── SECCIÓN VISTA PREVIA ───────────────────────────────────────────────
     local secPrev = sec(PageSave, 4)
 
     local rSP=mk("Frame",secPrev,{Size=UDim2.new(1,0,0,28),BackgroundTransparency=1,LayoutOrder=2})
@@ -468,13 +493,14 @@ function BuildsModule.init(ENV)
         end
     end)
 
+    -- ── renderSaveList ─────────────────────────────────────────────────────
     local renderToken = 0
     local rowPool = {}
     local renderSaveList
     renderSaveList = function(isAsync, onComplete)
         renderToken = renderToken + 1
         local myToken = renderToken
-        
+
         local function updateRow(i)
             if myToken ~= renderToken then return false end
             local sv = Saves[i]
@@ -485,7 +511,7 @@ function BuildsModule.init(ENV)
                 local nL=lbl(row,"",UDim2.new(1,-96,1,0),UDim2.new(0,8,0,0),T.text); nL.Name="NameLbl"
                 local useB=mk("TextButton",row,{Name="UseBtn",Size=UDim2.new(0,48,0,22),Position=UDim2.new(1,-92,0.5,-11),Text="Usar",TextColor3=T.text,BackgroundColor3=T.purple,Font=Enum.Font.GothamBold,TextSize=9}); corner(useB,4)
                 local delB=mk("TextButton",row,{Name="DelBtn",Size=UDim2.new(0,40,0,22),Position=UDim2.new(1,-42,0.5,-11),Text="X",TextColor3=T.text,BackgroundColor3=T.danger,Font=Enum.Font.GothamBold,TextSize=11}); corner(delB,4)
-                
+
                 useB.MouseButton1Click:Connect(function()
                     local idx = row.LayoutOrder
                     selSaveIdx=idx; placeScale=1; placeRot=CFrame.identity; SaveUI.scaleLbl.Text="1.0x"
@@ -499,13 +525,13 @@ function BuildsModule.init(ENV)
                     if selSaveIdx==idx then selSaveIdx=nil elseif selSaveIdx and selSaveIdx>idx then selSaveIdx=selSaveIdx-1 end
                     _G[GKEY]=Saves; renderSaveList(); renderSavePrev(); cCache={}
                 end)
-                
+
                 rowPool[i] = row
             else
                 row.Parent = SaveUI.listCont
                 row.LayoutOrder = i
             end
-            
+
             if sv then
                 row.Visible = true
                 local isSel=(selSaveIdx==i)
@@ -525,7 +551,7 @@ function BuildsModule.init(ENV)
             end
             return true
         end
-        
+
         if #Saves==0 then
             for _, row in ipairs(rowPool) do row.Visible = false end
             SaveUI.listScroll.Size=UDim2.new(1,0,0,22)
@@ -542,9 +568,9 @@ function BuildsModule.init(ENV)
             local emptyLbl = SaveUI.listCont:FindFirstChild("EmptyLbl")
             if emptyLbl then emptyLbl.Visible = false end
         end
-        
+
         local newH=math.clamp(#Saves*34,34,102); SaveUI.listScroll.Size=UDim2.new(1,0,0,newH)
-        
+
         if isAsync then
             task.spawn(function()
                 local i = 1
@@ -579,6 +605,7 @@ function BuildsModule.init(ENV)
         end
     end
 
+    -- ── btnSaveNow ─────────────────────────────────────────────────────────
     SaveUI.btnSaveNow.MouseButton1Click:Connect(function()
         local base=myBaseCF or CFrame.new(myRefPos())
         local data,cnt=captureBuild(selPlayer or LP.Name, base)
@@ -587,8 +614,7 @@ function BuildsModule.init(ENV)
             task.delay(1.5,function() if SaveUI.btnSaveNow and SaveUI.btnSaveNow.Parent then SaveUI.btnSaveNow.Text="Captura"; SaveUI.btnSaveNow.BackgroundColor3=T.build end end)
             return
         end
-        
-        -- Filtrado por zona si copyScope es "zone"
+
         if copyScope == "zone" and data and data.Block then
             local p = Players:FindFirstChild(selPlayer)
             local pZone = nil
@@ -597,7 +623,7 @@ function BuildsModule.init(ENV)
             elseif selPlayer == LP.Name and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
                 pZone = closestZone(LP.Character.HumanoidRootPart.Position)
             end
-            
+
             if pZone then
                 local newBlocks = {}
                 for _, pd in ipairs(data.Block) do
@@ -605,17 +631,16 @@ function BuildsModule.init(ENV)
                     local absPos = (base * CFrame.new(relPos)).Position
                     local localPos = pZone.CFrame:ToObjectSpace(CFrame.new(absPos)).Position
                     local halfSize = pZone.Size / 2
-                    -- Comprobar si el bloque está dentro de los límites de la zona
                     if math.abs(localPos.X) <= halfSize.X and math.abs(localPos.Y) <= halfSize.Y and math.abs(localPos.Z) <= halfSize.Z then
                         table.insert(newBlocks, pd)
                     end
                 end
                 data.Block = newBlocks
-                data.SrcZoneName = pZone.Name -- Actualizar nombre de zona origen para orientación correcta
+                data.SrcZoneName = pZone.Name
                 cnt = #newBlocks
             end
         end
-        
+
         local nm=SaveUI.nameInp.Text; nm=nm:gsub("%s+","_"); nm=nm:gsub("[^%w_%-]","")
         if nm=="" or nm=="_" then nm=autoName() end
         local used={}; for _,s in ipairs(Saves) do used[s.name]=true end
@@ -628,6 +653,7 @@ function BuildsModule.init(ENV)
         task.delay(1.2,function() if SaveUI.btnSaveNow and SaveUI.btnSaveNow.Parent then SaveUI.btnSaveNow.Text="Captura"; SaveUI.btnSaveNow.BackgroundColor3=T.build end end)
     end)
 
+    -- ── Build saved ────────────────────────────────────────────────────────
     local blockQueue2={}; local blockConn2=nil
     local function hookFolder2(folder) if blockConn2 then blockConn2:Disconnect(); blockConn2=nil end; blockQueue2={}; if folder then blockConn2=folder.ChildAdded:Connect(function(c) blockQueue2[#blockQueue2+1]=c end) end end
     local function popBlock2(timeout) local t0=tick(); while #blockQueue2==0 do if saveBuildState.cancel then return nil end; if tick()-t0>timeout then return nil end; task.wait() end; return table.remove(blockQueue2,1) end
@@ -646,13 +672,13 @@ function BuildsModule.init(ENV)
                 local bRF2=bTool2:FindFirstChild("RF"); local sRF2=sTool2 and sTool2:FindFirstChild("RF"); local pRF2=pTool2 and pTool2:FindFirstChild("RF")
                 if not bRF2 then error("BuildingTool sin RF") end
                 local pos=curPlacePos(); local delta=getSaveDelta(sv); local center=buildCenter(sv); local cAdj=delta*center
-                
+
                 local targetName = isShareModeOn and selPlayer or LP.Name
                 local folder2 = userFolder(targetName)
                 if not folder2 or folder2.Parent == nil then folder2 = userFolder(LP.Name) end
                 hookFolder2(folder2)
 
-                local blocks=sv.data.Block; local total=#blocks; local placed=0; 
+                local blocks=sv.data.Block; local total=#blocks; local placed=0;
                 local WORKERS2 = 15
                 if not isShareModeOn then
                     WORKERS2 = isSharing() and 15 or 50
@@ -662,27 +688,27 @@ function BuildsModule.init(ENV)
                     local nm=pd.BlockName
                     local inv = dataFolder and dataFolder:FindFirstChild(nm)
                     local invVal = (inv and inv.Value) or 1
-                    
+
                     if not isShareModeOn and (not inv or invVal <= 0) then return end
-                    
+
                     local rP=Vector3.new(pd.RelX,pd.RelY,pd.RelZ); local rR=CFrame.Angles(math.rad(pd.RotX or 0),math.rad(pd.RotY or 0),math.rad(pd.RotZ or 0))
                     local rPA=delta*rP; local rRA=(delta-delta.Position)*rR; local offset=(rPA-cAdj)*placeScale; local rotOff=placeRot*offset
                     local world=CFrame.new(pos+rotOff)*placeRot*rRA
-                    
-                    if not folder2 or folder2.Parent==nil then 
+
+                    if not folder2 or folder2.Parent==nil then
                         folder2 = userFolder(targetName)
                         if not folder2 or folder2.Parent == nil then folder2 = userFolder(LP.Name) end
-                        hookFolder2(folder2) 
+                        hookFolder2(folder2)
                     end
-                    
+
                     local ret=bRF2:InvokeServer(nm,invVal,nil,world,true,world,false); local blk
                     if typeof(ret)=="Instance" and ret:IsA("BasePart") then blk=ret else blk=popBlock2(2) end
-                    
-                    if blk then 
+
+                    if blk then
                         placed=placed+1
                         local sz=Vector3.new(pd.SizeX or 2,pd.SizeY or 2,pd.SizeZ or 2)*placeScale
                         if sRF2 then pcall(function() sRF2:InvokeServer(blk,sz,world) end) end
-                        if pd.ColorR then ppairs[#ppairs+1]={blk,Color3.new(pd.ColorR,pd.ColorG,pd.ColorB)} end 
+                        if pd.ColorR then ppairs[#ppairs+1]={blk,Color3.new(pd.ColorR,pd.ColorG,pd.ColorB)} end
                     end
                 end
                 local function worker2() while true do if saveBuildState.cancel then break end; local i=nextIdx2; nextIdx2=nextIdx2+1; if i>total then break end; pOB(blocks[i]) end; active2=active2-1 end
@@ -707,13 +733,627 @@ function BuildsModule.init(ENV)
     Players.PlayerAdded:Connect(function(p) watchPTeam(p); if whoVis then refreshWho() end end)
     Players.PlayerRemoving:Connect(function() task.defer(function() if whoVis then refreshWho() end end) end)
 
-    -- ════════════════════════════════════════════════════════════
-    -- EDIT TOOLS SECTION (collapsible)
-    -- Portado del HTML Build Editor: smooth / bevel / simplify /
-    -- defloat / dedup / normalize, con sliders y panel colapsable.
-    -- ════════════════════════════════════════════════════════════
+    -- ════════════════════════════════════════════════════════════════════════
+    -- SECCIÓN: INSPECTOR DE BLOQUES Y COLORES DEL BUILD
+    -- Permite ver todos los tipos de bloques únicos y colores únicos en el
+    -- build seleccionado, y cambiarlos en masa desde el inventario o picker.
+    -- ════════════════════════════════════════════════════════════════════════
 
-    -- ── Utilidades ──
+    -- ── Overlay reutilizable (fondo oscuro + panel) ────────────────────────
+    -- Se crea una sola vez y se reutiliza tanto para bloques como para colores.
+    local Win = ENV.Win  -- ventana raíz (igual que formas.lua usa ENV.Win)
+
+    local pickerOverlay = mk("Frame", Win, {
+        Size = UDim2.new(1,0,1,0),
+        BackgroundColor3 = Color3.new(0,0,0),
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+        Visible = false,
+        ZIndex = 60,
+    })
+    -- Clic en el fondo cierra el overlay
+    mk("TextButton", pickerOverlay, {
+        Size = UDim2.new(1,0,1,0),
+        BackgroundTransparency = 1,
+        Text = "",
+        ZIndex = 60,
+        AutoButtonColor = false,
+    }).MouseButton1Click:Connect(function() pickerOverlay.Visible = false end)
+
+    local pickerBox = mk("Frame", pickerOverlay, {
+        Size = UDim2.new(1,-20,0.82,0),
+        AnchorPoint = Vector2.new(0.5,0.5),
+        Position = UDim2.new(0.5,0,0.5,0),
+        BackgroundColor3 = T.panel,
+        BorderSizePixel = 0,
+        ZIndex = 61,
+    })
+    corner(pickerBox, 10)
+
+    local pickerTitle = mk("TextLabel", pickerBox, {
+        Size = UDim2.new(1,0,0,30),
+        BackgroundTransparency = 1,
+        Text = "ELEGIR BLOQUE",
+        TextColor3 = T.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        ZIndex = 62,
+    })
+
+    local pickerScroll = mk("ScrollingFrame", pickerBox, {
+        Size = UDim2.new(1,-8,1,-38),
+        Position = UDim2.new(0,4,0,32),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 4,
+        ScrollBarImageColor3 = T.accent,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.new(0,0,0,0),
+        ZIndex = 62,
+    })
+    mk("UIListLayout", pickerScroll, {Padding=UDim.new(0,4), SortOrder=Enum.SortOrder.LayoutOrder})
+    pad(pickerScroll, 4,4,4,4)
+
+    -- Callback que se llama cuando el usuario elige un ítem del overlay
+    local pickerCallback = nil
+
+    -- ── Función para abrir el overlay de BLOQUES ──────────────────────────
+    local function openBlockPicker(titleText, onChosen)
+        pickerCallback = onChosen
+        pickerTitle.Text = titleText or "ELEGIR BLOQUE"
+
+        -- Limpiar scroll
+        for _, c in ipairs(pickerScroll:GetChildren()) do
+            if not c:IsA("UIListLayout") and not c:IsA("UIPadding") then c:Destroy() end
+        end
+
+        local blocks = getPlayerBlocks()
+        if #blocks == 0 then
+            mk("TextLabel", pickerScroll, {
+                Size=UDim2.new(1,0,0,30), BackgroundTransparency=1,
+                Text="No tienes bloques en tu inventario",
+                TextColor3=T.sub, Font=Enum.Font.Gotham, TextSize=11,
+                TextXAlignment=Enum.TextXAlignment.Center, ZIndex=63,
+            })
+        else
+            for i, item in ipairs(blocks) do
+                local row = mk("TextButton", pickerScroll, {
+                    Size=UDim2.new(1,0,0,38),
+                    BackgroundColor3=T.card, BorderSizePixel=0,
+                    Text="", LayoutOrder=i, ZIndex=63,
+                })
+                corner(row, 6)
+
+                local ico = mk("ImageLabel", row, {
+                    Size=UDim2.new(0,28,0,28),
+                    Position=UDim2.new(0,5,0.5,-14),
+                    BackgroundTransparency=1, ZIndex=64,
+                    Image = item.image~="" and item.image or DEF_IMG,
+                })
+                mk("TextLabel", row, {
+                    Size=UDim2.new(1,-90,1,0),
+                    Position=UDim2.new(0,38,0,0),
+                    BackgroundTransparency=1,
+                    Font=Enum.Font.GothamSemibold, TextSize=11,
+                    TextColor3=T.text, TextXAlignment=Enum.TextXAlignment.Left,
+                    Text=item.name, ZIndex=64,
+                })
+                mk("TextLabel", row, {
+                    Size=UDim2.new(0,76,1,0),
+                    Position=UDim2.new(1,-80,0,0),
+                    BackgroundTransparency=1,
+                    Font=Enum.Font.GothamBold, TextSize=11,
+                    TextColor3=T.sub, TextXAlignment=Enum.TextXAlignment.Right,
+                    Text="x"..item.qty, ZIndex=64,
+                })
+
+                row.MouseButton1Click:Connect(function()
+                    pickerOverlay.Visible = false
+                    if pickerCallback then pickerCallback(item.name) end
+                end)
+            end
+        end
+
+        pickerOverlay.Visible = true
+    end
+
+    -- ── Función para obtener bloques únicos del save ───────────────────────
+    local function getUniqueBuildBlocks(sv)
+        if not sv or not sv.data or not sv.data.Block then return {} end
+        local seen = {}
+        local result = {}
+        for _, pd in ipairs(sv.data.Block) do
+            local nm = pd.BlockName or "?"
+            if not seen[nm] then
+                seen[nm] = {count=0, image=getBlockImage(nm)}
+            end
+            seen[nm].count = seen[nm].count + 1
+        end
+        for nm, info in pairs(seen) do
+            result[#result+1] = {name=nm, count=info.count, image=info.image}
+        end
+        table.sort(result, function(a,b) return a.count > b.count end)
+        return result
+    end
+
+    -- ── Función para obtener colores únicos del save ──────────────────────
+    local function getUniqueBuildColors(sv)
+        if not sv or not sv.data or not sv.data.Block then return {} end
+        local seen = {}
+        local result = {}
+        for _, pd in ipairs(sv.data.Block) do
+            if pd.ColorR then
+                -- Redondear a 2 decimales para agrupar colores similares
+                local r = math.floor((pd.ColorR or 0)*255+0.5)
+                local g = math.floor((pd.ColorG or 0)*255+0.5)
+                local b = math.floor((pd.ColorB or 0)*255+0.5)
+                local key = r..","..g..","..b
+                if not seen[key] then
+                    seen[key] = {
+                        color = Color3.fromRGB(r,g,b),
+                        r = pd.ColorR, g = pd.ColorG, b = pd.ColorB,
+                        count = 0,
+                    }
+                end
+                seen[key].count = seen[key].count + 1
+            end
+        end
+        for _, info in pairs(seen) do
+            result[#result+1] = info
+        end
+        table.sort(result, function(a,b) return a.count > b.count end)
+        return result
+    end
+
+    -- ════════════════════════════════════════════════════════════════════════
+    -- SECCIÓN COLAPSABLE: Inspector de Bloques y Colores
+    -- ════════════════════════════════════════════════════════════════════════
+    local secInspector = sec(PageSave, 5)
+
+    -- Encabezado colapsable
+    local inspHeaderRow = mk("Frame", secInspector, {
+        Size = UDim2.new(1,0,0,28),
+        BackgroundTransparency = 1,
+        LayoutOrder = 0,
+    })
+    local inspCollapsed = true
+    local inspToggleBtn = btn(inspHeaderRow, "▲  Bloques y Colores del Build", UDim2.new(1,0,1,0), nil, T.btnAlt)
+    inspToggleBtn.TextSize = 11
+    inspToggleBtn.Font = Enum.Font.GothamBold
+    inspToggleBtn.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Contenido
+    local inspContent = mk("Frame", secInspector, {
+        Size = UDim2.new(1,0,0,1),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        Visible = false,
+        LayoutOrder = 1,
+    })
+    mk("UIListLayout", inspContent, {Padding=UDim.new(0,6), SortOrder=Enum.SortOrder.LayoutOrder})
+
+    inspToggleBtn.MouseButton1Click:Connect(function()
+        inspCollapsed = not inspCollapsed
+        inspContent.Visible = not inspCollapsed
+        inspToggleBtn.Text = inspCollapsed and "▲  Bloques y Colores del Build" or "▼  Bloques y Colores del Build"
+    end)
+
+    -- ── Status de selección ────────────────────────────────────────────────
+    local inspNoSelLbl = mk("TextLabel", inspContent, {
+        Size = UDim2.new(1,0,0,22),
+        BackgroundTransparency = 1,
+        Text = "⚠ Selecciona un build primero",
+        TextColor3 = T.sub,
+        Font = Enum.Font.Gotham,
+        TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        LayoutOrder = 0,
+        Visible = true,
+    })
+
+    -- ── Sub-sección: BLOQUES ───────────────────────────────────────────────
+    local inspBlockSection = mk("Frame", inspContent, {
+        Size = UDim2.new(1,0,0,1),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        LayoutOrder = 1,
+        Visible = false,
+    })
+    mk("UIListLayout", inspBlockSection, {Padding=UDim.new(0,4), SortOrder=Enum.SortOrder.LayoutOrder})
+
+    mk("TextLabel", inspBlockSection, {
+        Size = UDim2.new(1,0,0,14),
+        BackgroundTransparency = 1,
+        Text = "TIPOS DE BLOQUES",
+        TextColor3 = T.sub,
+        Font = Enum.Font.GothamSemibold,
+        TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 0,
+    })
+
+    local inspBlockScroll = mk("ScrollingFrame", inspBlockSection, {
+        Size = UDim2.new(1,0,0,120),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 4,
+        ScrollBarImageColor3 = T.purple,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.new(0,0,0,0),
+        LayoutOrder = 1,
+    })
+    pad(inspBlockScroll, 2,2,2,2)
+    local inspBlockCont = mk("Frame", inspBlockScroll, {
+        Size = UDim2.new(1,0,0,1),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+    })
+    mk("UIListLayout", inspBlockCont, {Padding=UDim.new(0,3), SortOrder=Enum.SortOrder.LayoutOrder})
+
+    -- Botón cambiar TODOS los bloques de un tipo
+    local inspBlockStatusLbl = mk("TextLabel", inspBlockSection, {
+        Size = UDim2.new(1,0,0,14),
+        BackgroundTransparency = 1,
+        Text = "",
+        TextColor3 = T.ok,
+        Font = Enum.Font.Gotham,
+        TextSize = 9,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 2,
+    })
+
+    -- ── Sub-sección: COLORES ───────────────────────────────────────────────
+    local inspColorSection = mk("Frame", inspContent, {
+        Size = UDim2.new(1,0,0,1),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        LayoutOrder = 2,
+        Visible = false,
+    })
+    mk("UIListLayout", inspColorSection, {Padding=UDim.new(0,4), SortOrder=Enum.SortOrder.LayoutOrder})
+
+    mk("TextLabel", inspColorSection, {
+        Size = UDim2.new(1,0,0,14),
+        BackgroundTransparency = 1,
+        Text = "COLORES EN EL BUILD",
+        TextColor3 = T.sub,
+        Font = Enum.Font.GothamSemibold,
+        TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 0,
+    })
+
+    local inspColorScroll = mk("ScrollingFrame", inspColorSection, {
+        Size = UDim2.new(1,0,0,110),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 4,
+        ScrollBarImageColor3 = T.purple,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.new(0,0,0,0),
+        LayoutOrder = 1,
+    })
+    pad(inspColorScroll, 2,2,2,2)
+    local inspColorCont = mk("Frame", inspColorScroll, {
+        Size = UDim2.new(1,0,0,1),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+    })
+    mk("UIListLayout", inspColorCont, {Padding=UDim.new(0,3), SortOrder=Enum.SortOrder.LayoutOrder})
+
+    local inspColorStatusLbl = mk("TextLabel", inspColorSection, {
+        Size = UDim2.new(1,0,0,14),
+        BackgroundTransparency = 1,
+        Text = "",
+        TextColor3 = T.ok,
+        Font = Enum.Font.Gotham,
+        TextSize = 9,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 2,
+    })
+
+    -- Botón "Quitar todos los colores" (deja bloques sin color personalizado)
+    local inspBtnClearColors = btn(inspColorSection, "Quitar todos los colores", UDim2.new(1,0,0,24), nil, T.btnAlt)
+    inspBtnClearColors.TextSize = 9
+    inspBtnClearColors.LayoutOrder = 3
+
+    -- ── Función principal: poblar el inspector ─────────────────────────────
+    local function populateInspector()
+        local sv = selSaveIdx and Saves[selSaveIdx]
+
+        -- Limpiar previo
+        for _, c in ipairs(inspBlockCont:GetChildren()) do
+            if not c:IsA("UIListLayout") then c:Destroy() end
+        end
+        for _, c in ipairs(inspColorCont:GetChildren()) do
+            if not c:IsA("UIListLayout") then c:Destroy() end
+        end
+        inspBlockStatusLbl.Text = ""
+        inspColorStatusLbl.Text = ""
+
+        if not sv then
+            inspNoSelLbl.Visible = true
+            inspBlockSection.Visible = false
+            inspColorSection.Visible = false
+            return
+        end
+
+        inspNoSelLbl.Visible = false
+        inspBlockSection.Visible = true
+        inspColorSection.Visible = true
+
+        -- ── Poblar BLOQUES ─────────────────────────────────────────────────
+        local uniqueBlocks = getUniqueBuildBlocks(sv)
+        if #uniqueBlocks == 0 then
+            mk("TextLabel", inspBlockCont, {
+                Size=UDim2.new(1,0,0,22), BackgroundTransparency=1,
+                Text="(build sin bloques)", TextColor3=T.sub,
+                Font=Enum.Font.Gotham, TextSize=10,
+                TextXAlignment=Enum.TextXAlignment.Center, LayoutOrder=1,
+            })
+        else
+            for idx, item in ipairs(uniqueBlocks) do
+                local row = mk("Frame", inspBlockCont, {
+                    Size=UDim2.new(1,0,0,34),
+                    BackgroundColor3=T.input,
+                    BorderSizePixel=0,
+                    LayoutOrder=idx,
+                })
+                corner(row, 6)
+
+                -- Icono del bloque
+                mk("ImageLabel", row, {
+                    Size=UDim2.new(0,24,0,24),
+                    Position=UDim2.new(0,4,0.5,-12),
+                    BackgroundTransparency=1,
+                    Image = item.image~="" and item.image or DEF_IMG,
+                })
+
+                -- Nombre del bloque
+                mk("TextLabel", row, {
+                    Size=UDim2.new(1,-120,1,0),
+                    Position=UDim2.new(0,32,0,0),
+                    BackgroundTransparency=1,
+                    Font=Enum.Font.GothamSemibold,
+                    TextSize=10,
+                    TextColor3=T.text,
+                    TextXAlignment=Enum.TextXAlignment.Left,
+                    Text=item.name,
+                    TextTruncate=Enum.TextTruncate.AtEnd,
+                })
+
+                -- Cantidad
+                mk("TextLabel", row, {
+                    Size=UDim2.new(0,30,1,0),
+                    Position=UDim2.new(1,-112,0,0),
+                    BackgroundTransparency=1,
+                    Font=Enum.Font.GothamBold,
+                    TextSize=10,
+                    TextColor3=T.sub,
+                    TextXAlignment=Enum.TextXAlignment.Right,
+                    Text="×"..item.count,
+                })
+
+                -- Botón "Cambiar"
+                local changeBtn = mk("TextButton", row, {
+                    Size=UDim2.new(0,76,0,24),
+                    Position=UDim2.new(1,-80,0.5,-12),
+                    BackgroundColor3=T.accent,
+                    BorderSizePixel=0,
+                    Text="Cambiar",
+                    TextColor3=T.bg,
+                    Font=Enum.Font.GothamBold,
+                    TextSize=9,
+                })
+                corner(changeBtn, 5)
+
+                local capturedName = item.name  -- captura para el closure
+                changeBtn.MouseButton1Click:Connect(function()
+                    openBlockPicker("Reemplazar: "..capturedName, function(newBlockName)
+                        if newBlockName == capturedName then
+                            inspBlockStatusLbl.Text = "Ya es ese bloque, no se cambió nada"
+                            inspBlockStatusLbl.TextColor3 = T.sub
+                            return
+                        end
+                        -- Reemplazar en todos los bloques del save
+                        local changed = 0
+                        for _, pd in ipairs(sv.data.Block) do
+                            if pd.BlockName == capturedName then
+                                pd.BlockName = newBlockName
+                                changed = changed + 1
+                            end
+                        end
+                        inspBlockStatusLbl.Text = string.format("✓ %d '%s' → '%s'", changed, capturedName, newBlockName)
+                        inspBlockStatusLbl.TextColor3 = T.ok
+                        -- Invalidar caché y refrescar
+                        cCache[sv] = nil
+                        renderSavePrev()
+                        -- Refrescar la lista del inspector
+                        task.defer(populateInspector)
+                    end)
+                end)
+            end
+
+            -- Scroll adaptable
+            local listH = math.clamp(#uniqueBlocks * 37, 37, 148)
+            inspBlockScroll.Size = UDim2.new(1,0,0,listH)
+        end
+
+        -- ── Poblar COLORES ─────────────────────────────────────────────────
+        local uniqueColors = getUniqueBuildColors(sv)
+        if #uniqueColors == 0 then
+            mk("TextLabel", inspColorCont, {
+                Size=UDim2.new(1,0,0,22), BackgroundTransparency=1,
+                Text="(build sin colores personalizados)", TextColor3=T.sub,
+                Font=Enum.Font.Gotham, TextSize=10,
+                TextXAlignment=Enum.TextXAlignment.Center, LayoutOrder=1,
+            })
+            inspBtnClearColors.Visible = false
+        else
+            inspBtnClearColors.Visible = true
+            for idx, item in ipairs(uniqueColors) do
+                local row = mk("Frame", inspColorCont, {
+                    Size=UDim2.new(1,0,0,32),
+                    BackgroundColor3=T.input,
+                    BorderSizePixel=0,
+                    LayoutOrder=idx,
+                })
+                corner(row, 6)
+
+                -- Muestra del color (cuadrado coloreado)
+                local swatch = mk("Frame", row, {
+                    Size=UDim2.new(0,22,0,22),
+                    Position=UDim2.new(0,5,0.5,-11),
+                    BackgroundColor3=item.color,
+                    BorderSizePixel=0,
+                })
+                corner(swatch, 4)
+                stroke(swatch, T.sub, 1)
+
+                -- Texto RGB
+                local r255 = math.floor(item.r*255+0.5)
+                local g255 = math.floor(item.g*255+0.5)
+                local b255 = math.floor(item.b*255+0.5)
+                mk("TextLabel", row, {
+                    Size=UDim2.new(1,-130,1,0),
+                    Position=UDim2.new(0,32,0,0),
+                    BackgroundTransparency=1,
+                    Font=Enum.Font.GothamSemibold,
+                    TextSize=9,
+                    TextColor3=T.text,
+                    TextXAlignment=Enum.TextXAlignment.Left,
+                    Text=string.format("RGB(%d,%d,%d)", r255,g255,b255),
+                })
+
+                -- Cantidad de bloques con ese color
+                mk("TextLabel", row, {
+                    Size=UDim2.new(0,28,1,0),
+                    Position=UDim2.new(1,-112,0,0),
+                    BackgroundTransparency=1,
+                    Font=Enum.Font.GothamBold,
+                    TextSize=9,
+                    TextColor3=T.sub,
+                    TextXAlignment=Enum.TextXAlignment.Right,
+                    Text="×"..item.count,
+                })
+
+                -- Botón "Cambiar"
+                local colChangeBtn = mk("TextButton", row, {
+                    Size=UDim2.new(0,76,0,22),
+                    Position=UDim2.new(1,-80,0.5,-11),
+                    BackgroundColor3=T.accent,
+                    BorderSizePixel=0,
+                    Text="Cambiar",
+                    TextColor3=T.bg,
+                    Font=Enum.Font.GothamBold,
+                    TextSize=9,
+                })
+                corner(colChangeBtn, 5)
+
+                -- Capturamos los valores originales del color para el closure
+                local capR, capG, capB = item.r, item.g, item.b
+
+                colChangeBtn.MouseButton1Click:Connect(function()
+                    -- Abrir el color picker nativo (igual que formas.lua)
+                    if openCP then
+                        openCP(Color3.new(capR, capG, capB), function(newCol)
+                            -- Aplicar al cerrar
+                            local changed = 0
+                            for _, pd in ipairs(sv.data.Block) do
+                                if pd.ColorR then
+                                    local pr = math.floor((pd.ColorR or 0)*255+0.5)
+                                    local pg = math.floor((pd.ColorG or 0)*255+0.5)
+                                    local pb = math.floor((pd.ColorB or 0)*255+0.5)
+                                    if pr == math.floor(capR*255+0.5)
+                                    and pg == math.floor(capG*255+0.5)
+                                    and pb == math.floor(capB*255+0.5) then
+                                        pd.ColorR = newCol.R
+                                        pd.ColorG = newCol.G
+                                        pd.ColorB = newCol.B
+                                        changed = changed + 1
+                                    end
+                                end
+                            end
+                            inspColorStatusLbl.Text = string.format("✓ %d bloques recoloreados", changed)
+                            inspColorStatusLbl.TextColor3 = T.ok
+                            cCache[sv] = nil
+                            renderSavePrev()
+                            task.defer(populateInspector)
+                        end, function(previewCol)
+                            -- Preview en tiempo real: actualizar el swatch
+                            if swatch and swatch.Parent then
+                                swatch.BackgroundColor3 = previewCol
+                            end
+                        end)
+                    else
+                        -- Fallback: si no hay openCP disponible, informar
+                        inspColorStatusLbl.Text = "Color picker no disponible"
+                        inspColorStatusLbl.TextColor3 = T.danger
+                    end
+                end)
+            end
+
+            -- Scroll adaptable
+            local listH = math.clamp(#uniqueColors * 35, 35, 140)
+            inspColorScroll.Size = UDim2.new(1,0,0,listH)
+        end
+    end
+
+    -- Limpiar colores del save
+    inspBtnClearColors.MouseButton1Click:Connect(function()
+        local sv = selSaveIdx and Saves[selSaveIdx]
+        if not sv or not sv.data then return end
+        local cleared = 0
+        for _, pd in ipairs(sv.data.Block) do
+            if pd.ColorR then
+                pd.ColorR = nil; pd.ColorG = nil; pd.ColorB = nil
+                cleared = cleared + 1
+            end
+        end
+        inspColorStatusLbl.Text = string.format("✓ %d colores eliminados", cleared)
+        inspColorStatusLbl.TextColor3 = T.ok
+        cCache[sv] = nil
+        renderSavePrev()
+        task.defer(populateInspector)
+    end)
+
+    -- Repoblar el inspector cuando se abre el panel colapsable
+    -- o cuando cambia el build seleccionado (hook en useB del renderSaveList).
+    -- Lo hacemos vía una función pública que renderSaveList puede llamar.
+    local function onSelSaveChanged()
+        if not inspCollapsed then
+            populateInspector()
+        end
+    end
+
+    -- Interceptar el toggle del inspector para poblar al abrir
+    local _origInspToggle = inspToggleBtn.MouseButton1Click
+    inspToggleBtn.MouseButton1Click:Connect(function()
+        -- Ya conectado arriba; al abrirse llamar populate
+        if not inspCollapsed then  -- se acaba de abrir (ya se cambió el estado arriba)
+            populateInspector()
+        end
+    end)
+    -- Nota: el orden de conexión hace que primero se ejecute el toggle de estado
+    -- y luego este segundo handler que llama populate. Funciona correctamente.
+
+    -- También refrescar cuando cambie selSaveIdx externamente.
+    -- Esto se hace llamando populateInspector() desde renderSaveList.
+    -- Parchamos el renderSaveList para que, al seleccionar un build,
+    -- también actualice el inspector si está abierto.
+    local _origRenderSaveList = renderSaveList
+    renderSaveList = function(isAsync, onComplete)
+        _origRenderSaveList(isAsync, function()
+            onSelSaveChanged()
+            if onComplete then onComplete() end
+        end)
+    end
+
+    -- ════════════════════════════════════════════════════════════════════════
+    -- EDIT TOOLS SECTION (collapsible)
+    -- ════════════════════════════════════════════════════════════════════════
+
     local function deepCopyTbl(t)
         local c = {}
         for k, v in pairs(t) do
@@ -772,7 +1412,6 @@ function BuildsModule.init(ENV)
         return result
     end
 
-    -- ── Algoritmos (portados del HTML) ──
     local function algoSmooth(blks, params)
         local iter = params.iter or 2
         local str  = (params.str or 4) / 10
@@ -970,7 +1609,6 @@ function BuildsModule.init(ENV)
         return result
     end
 
-    -- ── Config de herramientas ──
     local EDIT_TOOL_CONFIG = {
         smooth = {
             label = "Suavizar",
@@ -1023,10 +1661,8 @@ function BuildsModule.init(ENV)
 
     local EDIT_TOOL_ORDER = {"smooth", "bevel", "simplify", "defloat", "dedup", "normalize"}
 
-    -- ── Sección colapsable ──
-    local secEdit = sec(PageSave, 5)
+    local secEdit = sec(PageSave, 6)
 
-    -- Fila de encabezado con toggle
     local editHeaderRow = mk("Frame", secEdit, {
         Size = UDim2.new(1, 0, 0, 28),
         BackgroundTransparency = 1,
@@ -1038,7 +1674,6 @@ function BuildsModule.init(ENV)
     editToggleBtn.Font = Enum.Font.GothamBold
     editToggleBtn.TextXAlignment = Enum.TextXAlignment.Left
 
-    -- Contenido (colapsable)
     local editContent = mk("Frame", secEdit, {
         Size = UDim2.new(1, 0, 0, 1),
         AutomaticSize = Enum.AutomaticSize.Y,
@@ -1053,7 +1688,6 @@ function BuildsModule.init(ENV)
         editToggleBtn.Text = editCollapsed and "▲  Editar Build" or "▼  Editar Build"
     end)
 
-    -- Descripción
     local editDescLbl = mk("TextLabel", editContent, {
         Size = UDim2.new(1, 0, 0, 28),
         BackgroundTransparency = 1,
@@ -1066,7 +1700,6 @@ function BuildsModule.init(ENV)
         LayoutOrder = 0,
     })
 
-    -- Fila de botones de herramientas
     local editToolRow = mk("Frame", editContent, {
         Size = UDim2.new(1, 0, 0, 30),
         BackgroundTransparency = 1,
@@ -1091,7 +1724,6 @@ function BuildsModule.init(ENV)
         editToolBtns[t] = tb
     end
 
-    -- Contenedor de sliders dinámico
     local editParamsCont = mk("Frame", editContent, {
         Size = UDim2.new(1, 0, 0, 1),
         AutomaticSize = Enum.AutomaticSize.Y,
@@ -1104,7 +1736,6 @@ function BuildsModule.init(ENV)
     local editParamInputs = {}
 
     local function buildEditParams(tool)
-        -- Limpiar contenedor
         for _, child in ipairs(editParamsCont:GetChildren()) do
             if not child:IsA("UIListLayout") then child:Destroy() end
         end
@@ -1117,7 +1748,7 @@ function BuildsModule.init(ENV)
                 BackgroundTransparency = 1,
                 LayoutOrder = i,
             })
-            local pLbl = mk("TextLabel", row, {
+            mk("TextLabel", row, {
                 Size = UDim2.new(0, 90, 1, 0),
                 Position = UDim2.new(0, 0, 0, 0),
                 BackgroundTransparency = 1,
@@ -1171,7 +1802,6 @@ function BuildsModule.init(ENV)
         editToolBtns[t].MouseButton1Click:Connect(function() selectEditTool(t) end)
     end
 
-    -- Botones de acción: Aplicar / Guardar / Deshacer
     local editApplyBtn = btn(editContent, "Aplicar", UDim2.new(1, 0, 0, 28), nil, T.purple)
     editApplyBtn.TextSize = 10
     editApplyBtn.Font = Enum.Font.GothamBold
@@ -1198,7 +1828,6 @@ function BuildsModule.init(ENV)
         LayoutOrder = 6,
     })
 
-    -- Stack de undo por save
     local editUndoStack = {}
 
     local function getEditParams()
@@ -1216,7 +1845,6 @@ function BuildsModule.init(ENV)
             editStatusLbl.TextColor3 = T.danger
             return
         end
-        -- Guardar estado previo para undo
         table.insert(editUndoStack, {sv = sv, blocks = deepCopyTbl(sv.data.Block)})
         if #editUndoStack > 30 then table.remove(editUndoStack, 1) end
 
@@ -1259,7 +1887,6 @@ function BuildsModule.init(ENV)
             editStatusLbl.TextColor3 = T.ok
             editApplyBtn.Text = "Aplicar"
             editApplyBtn.Active = true
-            -- Invalidar caches y refrescar
             cCache[sv] = nil
             _lastDelta = {sv=nil, dst=nil, delta=CFrame.identity}
             renderSavePrev()
@@ -1274,7 +1901,6 @@ function BuildsModule.init(ENV)
             editStatusLbl.TextColor3 = T.sub
             return
         end
-        -- Buscar el último snapshot de este sv
         local foundIdx = nil
         for i = #editUndoStack, 1, -1 do
             if editUndoStack[i].sv == sv then
@@ -1334,17 +1960,10 @@ function BuildsModule.init(ENV)
         end)
     end)
 
-    -- Inicializar herramienta por defecto
     selectEditTool("smooth")
-
-    -- Iniciar colapsado para que no moleste
     editCollapsed = true
     editContent.Visible = false
     editToggleBtn.Text = "▲  Editar Build"
-
-    -- ════════════════════════════════════════════════════════════
-    -- FIN EDIT TOOLS SECTION
-    -- ════════════════════════════════════════════════════════════
 
     return {
         page            = PageSave,
@@ -1356,8 +1975,8 @@ function BuildsModule.init(ENV)
             task.spawn(function()
                 if SaveUI.listCont then
                     renderToken = renderToken + 1
-                    for _,c in ipairs(SaveUI.listCont:GetChildren()) do 
-                        if not c:IsA("UIListLayout") then c.Visible = false end 
+                    for _,c in ipairs(SaveUI.listCont:GetChildren()) do
+                        if not c:IsA("UIListLayout") then c.Visible = false end
                     end
                     local emptyLbl = SaveUI.listCont:FindFirstChild("EmptyLbl")
                     if not emptyLbl then
@@ -1367,13 +1986,13 @@ function BuildsModule.init(ENV)
                     end
                     emptyLbl.Visible = true
                 end
-                
+
                 for i = 1, #Saves do Saves[i] = nil end
                 cCache = {}
-                
+
                 if lOrd then lOrd() end
                 if syncOrd then syncOrd() end
-                
+
                 local total = ORD and #ORD or 0
                 local toRemove = {}
                 for i = 1, total do
@@ -1384,7 +2003,7 @@ function BuildsModule.init(ENV)
                         if not ok or not res then
                             ok, res = pcall(readBF, path)
                         end
-                        
+
                         if ok and res and type(res) == "table" then
                             local svData = res.data or res
                             Saves[#Saves+1] = {name=name, data=svData, _path=path}
@@ -1392,18 +2011,18 @@ function BuildsModule.init(ENV)
                             toRemove[#toRemove+1] = name
                         end
                     end
-                    
+
                     if i % 10 == 0 then
                         task.wait()
                     end
                 end
-                
+
                 for _, name in ipairs(toRemove) do
                     if delSaveOrd then delSaveOrd(name) end
                 end
-                
+
                 if selSaveIdx and not Saves[selSaveIdx] then selSaveIdx = nil end
-                
+
                 renderSaveList(true, function()
                     if selSaveIdx then renderSavePrev() else updSaveHandles() end
                     startSelTicker()
