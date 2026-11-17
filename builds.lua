@@ -480,16 +480,8 @@ function BuildsModule.init(ENV)
         end
     end
 
-    local shareRow=mk("Frame",secSave,{Size=UDim2.new(1,0,0,30),BackgroundTransparency=1,LayoutOrder=3})
-    SaveUI.btnShareMode=btn(shareRow,"Compartir: ...",UDim2.new(1,0,0,28),nil,T.btnAlt)
-    SaveUI.btnShareMode.TextSize=10
-    SaveUI.btnShareMode.Font=Enum.Font.GothamSemibold
-    SaveUI.btnShareMode.TextXAlignment=Enum.TextXAlignment.Left
-    SaveUI.btnShareMode.AutoButtonColor=false
-    SaveUI.btnShareMode.MouseButton1Click:Connect(function()
-        -- Click = refresh manual (el estado se detecta solo)
-        applyAutoShare()
-    end)
+    -- (Modo compartir: detección automática, sin botón visible para ahorrar espacio.
+    --  applyAutoShare / hookShareWatchers se invocan al final del init.)
 
     local saveRow=mk("Frame",secSave,{Size=UDim2.new(1,0,0,28),BackgroundTransparency=1,LayoutOrder=4})
     SaveUI.nameInp=box(saveRow,UDim2.new(1,-80,0,26),UDim2.new(0,0,0,0),""); SaveUI.nameInp.PlaceholderText="Nombre del build..."
@@ -714,43 +706,29 @@ function BuildsModule.init(ENV)
     }
     local function findZoneByName(name)
         if not name then return nil end
-        local ws = game:GetService("Workspace")
-        local z = ws:FindFirstChild(name)
+        -- FindFirstChild(name, true) = búsqueda recursiva: encuentra las zones
+        -- estén sueltas en Workspace o dentro de carpetas/modelos.
+        local z = game:GetService("Workspace"):FindFirstChild(name, true)
         if z and z:IsA("BasePart") then return z end
-        local lower = string.lower(name)
-        for _, child in ipairs(ws:GetChildren()) do
-            if child:IsA("BasePart") and string.lower(child.Name) == lower then
-                return child
-            end
-        end
         return nil
     end
+    local function zoneContainsXZ(zone, pos)
+        local localPos = zone.CFrame:ToObjectSpace(CFrame.new(pos)).Position
+        local half = zone.Size / 2
+        return math.abs(localPos.X) <= half.X and math.abs(localPos.Z) <= half.Z
+    end
     local function findPlayerZone(pos)
-        -- 1) closestZone del ENV
+        -- 1) closestZone del ENV, pero SOLO si la posición está realmente dentro
         local z = closestZone(pos)
-        if z and z:IsA("BasePart") then return z end
-        -- 2) Buscar por bounding X/Z en las zonas conocidas (cualquier altura)
+        if z and z:IsA("BasePart") and zoneContainsXZ(z, pos) then return z end
+        -- 2) Buscar por nombre en las zonas conocidas (recursivo, dentro de X/Z)
         for _, name in ipairs(ZONE_NAMES) do
             local zone = findZoneByName(name)
-            if zone then
-                local localPos = zone.CFrame:ToObjectSpace(CFrame.new(pos)).Position
-                local half = zone.Size / 2
-                if math.abs(localPos.X) <= half.X and math.abs(localPos.Z) <= half.Z then
-                    return zone
-                end
-            end
+            if zone and zoneContainsXZ(zone, pos) then return zone end
         end
-        -- 3) Fallback: zona más cercana por distancia horizontal
-        local best, bestDist = nil, math.huge
-        for _, name in ipairs(ZONE_NAMES) do
-            local zone = findZoneByName(name)
-            if zone then
-                local dz = zone.Position - pos
-                local dist = math.sqrt(dz.X*dz.X + dz.Z*dz.Z)
-                if dist < bestDist then bestDist = dist; best = zone end
-            end
-        end
-        return best
+        -- 3) Si nada contiene la posición, NO filtrar (return nil → se guardan
+        --    todos; nunca se pierden bloques ni da "0 bloques")
+        return nil
     end
 
     -- ── btnSaveNow ─────────────────────────────────────────────────────────
@@ -776,19 +754,29 @@ function BuildsModule.init(ENV)
 
             if pZone then
                 local newBlocks = {}
+                local zoneCF = pZone.CFrame
+                local zonePos = zoneCF.Position
+                local halfSize = pZone.Size / 2
                 for _, pd in ipairs(data.Block) do
                     local relPos = Vector3.new(pd.RelX or 0, pd.RelY or 0, pd.RelZ or 0)
+                    -- absPos = posición mundo del bloque
                     local absPos = (base * CFrame.new(relPos)).Position
-                    local localPos = pZone.CFrame:ToObjectSpace(CFrame.new(absPos)).Position
-                    local halfSize = pZone.Size / 2
+                    local offset = absPos - zonePos
+                    -- Proyectar sobre los ejes X/Z locales de la zona (soporta rotación)
+                    local localX = offset:Dot(zoneCF.XVector)
+                    local localZ = offset:Dot(zoneCF.ZVector)
                     -- Sin filtro Y: copia TODO lo arriba y abajo sin importar la altura
-                    if math.abs(localPos.X) <= halfSize.X and math.abs(localPos.Z) <= halfSize.Z then
+                    if math.abs(localX) <= halfSize.X and math.abs(localZ) <= halfSize.Z then
                         table.insert(newBlocks, pd)
                     end
                 end
-                data.Block = newBlocks
-                data.SrcZoneName = pZone.Name
-                cnt = #newBlocks
+                -- Safety: si el filtro descartó todo pero había bloques, conservarlos
+                -- todos (evita "0 bloques" por un desajuste de coordenadas)
+                if #newBlocks > 0 or #data.Block == 0 then
+                    data.Block = newBlocks
+                    data.SrcZoneName = pZone.Name
+                    cnt = #newBlocks
+                end
             end
         end
 
@@ -1473,9 +1461,10 @@ function BuildsModule.init(ENV)
     -- o cuando cambia el build seleccionado (hook en useB del renderSaveList).
     -- Lo hacemos vía una función pública que renderSaveList puede llamar.
     local function onSelSaveChanged()
-        if not inspCollapsed then
-            populateInspector()
-        end
+        -- Siempre poblar: aunque el inspector esté colapsado, el contenido queda
+        -- listo para cuando se expande (antes, si estaba minimizado al hacer "Usar",
+        -- al expandir no aparecía nada hasta clickear "Usar" otra vez).
+        populateInspector()
     end
 
     -- Interceptar el toggle del inspector para poblar al abrir
