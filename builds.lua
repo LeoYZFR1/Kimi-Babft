@@ -189,7 +189,32 @@ function BuildsModule.init(ENV)
         return nil
     end
 
-    -- ── cCache / getSaveDelta ──────────────────────────────────────────────
+    -- findPlayerZone se define más abajo (~756); forward-decl para que countFor
+    -- (who-list) pueda usarlo. Se asigna durante init, antes de cualquier llamada.
+    local findPlayerZone
+
+    -- countFor: contador del who-list. Si copyScope == "zone", cuenta SOLO los
+    -- bloques que el jugador tiene DENTRO de su zona (no todo el mapa). Sin zona
+    -- detectada, vuelve al total (countPB).
+    local function countFor(un)
+        if copyScope ~= "zone" then return countPB(un) end
+        local uf = userFolder(un); if not uf then return 0 end
+        local p = Players:FindFirstChild(un)
+        local hrp = p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+        local zone = hrp and findPlayerZone(hrp.Position)
+        if not zone then return countPB(un) end
+        local zPos = zone.Position; local zCF = zone.CFrame; local half = zone.Size/2
+        local c = 0
+        for _,d in ipairs(uf:GetDescendants()) do
+            if d:IsA("BasePart") then
+                local off = d.Position - zPos
+                if math.abs(off:Dot(zCF.XVector)) <= half.X and math.abs(off:Dot(zCF.ZVector)) <= half.Z then c = c + 1 end
+            end
+        end
+        return c
+    end
+
+    -- ── cCache / buildCenter ──────────────────────────────────────────────
     local cCache = {}
     local function buildCenter(sv)
         if not sv or not sv.data or not sv.data.Block or #sv.data.Block==0 then return Vector3.zero end
@@ -308,7 +333,7 @@ function BuildsModule.init(ENV)
         task.spawn(function() local ok2,url=pcall(function() return Players:GetUserThumbnailAsync(uid,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size48x48) end); if ok2 and av and av.Parent then av.Image=url end end)
         local nX=avX+26; local nL=mk("TextLabel",whoBtn,{Position=UDim2.new(0,nX,0,0),Size=UDim2.new(1,-nX-18,1,0),Text=dn.." (@"..un..")",TextColor3=T.text,BackgroundTransparency=1,Font=Enum.Font.GothamSemibold,TextSize=10,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd})
         mk("TextLabel",whoBtn,{Position=UDim2.new(1,-18,0,0),Size=UDim2.new(0,16,1,0),Text=whoVis and"▲"or"▼",TextColor3=T.sub,BackgroundTransparency=1,Font=Enum.Font.GothamBold,TextSize=10,TextXAlignment=Enum.TextXAlignment.Center})
-        task.spawn(function() local bc=countPB(un); if nL and nL.Parent then nL.Text=dn.." (@"..un..") · "..bc end end)
+        task.spawn(function() local bc=countFor(un); if nL and nL.Parent then nL.Text=dn.." (@"..un..") · "..bc end end)
     end
 
     local selTickToken = nil
@@ -366,7 +391,7 @@ function BuildsModule.init(ENV)
                 if not rec then rec=buildWhoRow(m); whoRows[m.uid]=rec end
                 rec.row.LayoutOrder=order
                 local tc=listTC(m.uname); if rec.lastTC~=tc then rec.lastTC=tc; rec.row.BackgroundColor3=tc end
-                local bc=countPB(m.uname); if rec.lastCount~=bc then rec.lastCount=bc; rec.blockLbl.Text=bc>0 and tostring(bc) or"0"; rec.blockLbl.TextColor3=bc>0 and T.ok or T.sub end
+                local bc=countFor(m.uname); if rec.lastCount~=bc then rec.lastCount=bc; rec.blockLbl.Text=bc>0 and tostring(bc) or"0"; rec.blockLbl.TextColor3=bc>0 and T.ok or T.sub end
                 local lIco=rec.row:FindFirstChild("LdrIco"); local isL=isLdr(m.uname)
                 if isL and not lIco then mk("ImageLabel",rec.row,{Name="LdrIco",Size=UDim2.new(0,16,0,16),Position=UDim2.new(0,3,0.5,-8),BackgroundTransparency=1,Image=ICON_LEADER,ZIndex=3}) elseif not isL and lIco then lIco:Destroy() end
                 local av=rec.row:FindFirstChild("Avatar"); if av then av.Position=UDim2.new(0,isL and 22 or 5,0.5,-13) end
@@ -384,7 +409,7 @@ function BuildsModule.init(ENV)
                 task.wait(1); if selTickToken~=tok then break end
                 if not PageSave.Visible then continue end
                 if whoBtn and whoBtn.Parent and not whoVis then
-                    local bc=countPB(curUN); local isL=isLdr(curUN)
+                    local bc=countFor(curUN); local isL=isLdr(curUN)
                     local lIco=whoBtn:FindFirstChild("LdrIco")
                     if isL and not lIco then mk("ImageLabel",whoBtn,{Name="LdrIco",Size=UDim2.new(0,14,0,14),Position=UDim2.new(0,4,0.5,-7),BackgroundTransparency=1,Image=ICON_LEADER,ZIndex=3}) elseif not isL and lIco then lIco:Destroy() end
                     local av=whoBtn:FindFirstChild("Avatar"); if av then av.Position=UDim2.new(0,isL and 20 or 4,0.5,-11) end
@@ -753,7 +778,7 @@ function BuildsModule.init(ENV)
     -- ── findPlayerZone: zona del jugador que se captura ──
     -- (ZONE_NAMES / findZoneByName / zoneContainsXZ están definidos arriba,
     --  junto a myZone). Sólo filtra X/Z: copia TODO lo arriba y abajo.
-    local function findPlayerZone(pos)
+    findPlayerZone = function(pos)
         -- 1) closestZone del ENV, pero SOLO si la posición está realmente dentro
         local z = closestZone(pos)
         if z and z:IsA("BasePart") and zoneContainsXZ(z, pos) then return z end
@@ -769,6 +794,27 @@ function BuildsModule.init(ENV)
 
     -- ── btnSaveNow ─────────────────────────────────────────────────────────
     SaveUI.btnSaveNow.MouseButton1Click:Connect(function()
+        -- Esperar a que la carpeta del jugador se estabilice (bloques replicados
+        -- desde el server) antes de capturar: evita capturar a medias y que
+        -- "falten bloques" (primera copia incompleta, segunda sí). Si la carpeta
+        -- ya no cambia, rompe rápido (~0.25s).
+        local syncP = selPlayer or LP.Name
+        local uf = userFolder(syncP)
+        if uf then
+            SaveUI.btnSaveNow.Text="Sincronizando..."; SaveUI.btnSaveNow.BackgroundColor3=T.btnAlt
+            local last = -1; local stableAt = nil; local t0 = tick()
+            while tick()-t0 < 1.0 do
+                local cur = 0
+                for _,d in ipairs(uf:GetDescendants()) do if d:IsA("BasePart") then cur = cur + 1 end end
+                if cur == last then
+                    if not stableAt then stableAt = tick() end
+                    if tick()-stableAt >= 0.25 then break end
+                else
+                    last = cur; stableAt = nil
+                end
+                task.wait(0.1)
+            end
+        end
         local base=myBaseCF or CFrame.new(myRefPos())
         local data,cnt=captureBuild(selPlayer or LP.Name, base)
         if not data then
@@ -796,17 +842,13 @@ function BuildsModule.init(ENV)
                 -- Filtrar bloques por X/Z de la zona sólo si copyScope == "zone"
                 if copyScope == "zone" and data.Block then
                     local newBlocks = {}
-                    local zoneCF = pZone.CFrame
-                    local zonePos = zoneCF.Position
                     local halfSize = pZone.Size / 2
+                    -- RelX/RelZ ya están en el espacio LOCAL de la zona origen
+                    -- (captureBuild los guardó relativos al CFrame de pZone), así
+                    -- que el chequeo es directo: |RelX|<=half.X y |RelZ|<=half.Z.
+                    -- Sin filtro Y: copia TODO lo arriba y abajo.
                     for _, pd in ipairs(data.Block) do
-                        local relPos = Vector3.new(pd.RelX or 0, pd.RelY or 0, pd.RelZ or 0)
-                        local absPos = (base * CFrame.new(relPos)).Position
-                        local offset = absPos - zonePos
-                        local localX = offset:Dot(zoneCF.XVector)
-                        local localZ = offset:Dot(zoneCF.ZVector)
-                        -- Sin filtro Y: copia TODO lo arriba y abajo
-                        if math.abs(localX) <= halfSize.X and math.abs(localZ) <= halfSize.Z then
+                        if math.abs(pd.RelX or 0) <= halfSize.X and math.abs(pd.RelZ or 0) <= halfSize.Z then
                             table.insert(newBlocks, pd)
                         end
                     end
