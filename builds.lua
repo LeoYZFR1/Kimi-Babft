@@ -157,6 +157,43 @@ function BuildsModule.init(ENV)
         return result
     end
 
+    -- ── Zonas (helpers compartidos por placement y captura) ───────────────
+    -- Build a Boat: cada zona = <BrickColor.Name>.."Zone" y coincide con el
+    -- TeamColor del equipo del jugador. Todas mismo tamaño, distinta rotación,
+    -- orientadas hacia el mar (workspace.Water).
+    local ZONE_NAMES = {
+        "MagentaZone", "New YellerZone", "Really blueZone",
+        "Really redZone", "WhiteZone", "CamoZone", "BlackZone",
+    }
+    local function findZoneByName(name)
+        if not name then return nil end
+        -- FindFirstChild(name, true) = búsqueda recursiva (sueltas o en carpetas)
+        local z = game:GetService("Workspace"):FindFirstChild(name, true)
+        if z and z:IsA("BasePart") then return z end
+        return nil
+    end
+    local function zoneContainsXZ(zone, pos)
+        local localPos = zone.CFrame:ToObjectSpace(CFrame.new(pos)).Position
+        local half = zone.Size / 2
+        return math.abs(localPos.X) <= half.X and math.abs(localPos.Z) <= half.Z
+    end
+    -- myZone: la zona ASIGNADA al jugador local (por TeamColor), NO la zona donde
+    -- está parado ahora. El preview y el delta de rotación SIEMPRE usan esta,
+    -- así el build aparece en mi zona y orientado hacia mi mar.
+    local _myZoneCache = nil
+    local function myZone()
+        if _myZoneCache and _myZoneCache.Parent then return _myZoneCache end
+        local team = LP.Team
+        if team and team.TeamColor then
+            local z = findZoneByName(team.TeamColor.Name .. "Zone")
+            if z then _myZoneCache = z; return z end
+        end
+        -- Fallback: zona actual (sólo si no hay match por team)
+        local z = closestZone(myRefPos())
+        if z and z:IsA("BasePart") then _myZoneCache = z; return z end
+        return nil
+    end
+
     -- ── cCache / getSaveDelta ──────────────────────────────────────────────
     local cCache = {}
     local function buildCenter(sv)
@@ -168,14 +205,14 @@ function BuildsModule.init(ENV)
     end
     local _lastDelta={sv=nil,dst=nil,delta=CFrame.identity}
     local function getSaveDelta(sv)
-        local mz=closestZone(myRefPos()); local mzN=mz and mz.Name or"WhiteZone"
+        local mz=myZone(); local mzN=mz and mz.Name or"WhiteZone"
         local sN=(sv and sv.data and sv.data.SrcZoneName) or"WhiteZone"
         if _lastDelta.sv==sv and _lastDelta.dst==mzN then return _lastDelta.delta end
         local delta=zoneDeltaRot(sN,mzN); _lastDelta={sv=sv,dst=mzN,delta=delta}; return delta
     end
     local function curPlacePos()
         if placePosV then return placePosV end
-        local z=closestZone(myRefPos()); if z then return z.Position+Vector3.new(0,z.Size.Y/2+1,0) end
+        local z=myZone(); if z then return z.Position+Vector3.new(0,z.Size.Y/2+1,0) end
         return myRefPos()
     end
 
@@ -530,12 +567,21 @@ function BuildsModule.init(ENV)
     end
     refPlaceBtns()
 
-    SaveUI.BtnSavePrev.MouseButton1Click:Connect(function()
-        savePrevOn=not savePrevOn
-        SaveUI.BtnSavePrev.Text=savePrevOn and"Vista previa: On"or"Vista previa: Off"
-        SaveUI.BtnSavePrev.BackgroundColor3=savePrevOn and T.accent or T.btnAlt
-        SaveUI.BtnSavePrev.TextColor3=savePrevOn and T.bg or T.text
+    -- setSavePrev: cambia el preview on/off, actualiza el botón y re-renderiza.
+    -- Durante auto-build siempre lo fuerza OFF (el preview molesta mientras se
+    -- colocan los bloques reales); al terminar o al usar un guardado se reactiva.
+    local function setSavePrev(on)
+        if saveBuildState.running then on = false end
+        savePrevOn = on
+        if SaveUI.BtnSavePrev and SaveUI.BtnSavePrev.Parent then
+            SaveUI.BtnSavePrev.Text = on and "Vista previa: On" or "Vista previa: Off"
+            SaveUI.BtnSavePrev.BackgroundColor3 = on and T.accent or T.btnAlt
+            SaveUI.BtnSavePrev.TextColor3 = on and T.bg or T.text
+        end
         renderSavePrev()
+    end
+    SaveUI.BtnSavePrev.MouseButton1Click:Connect(function()
+        setSavePrev(not savePrevOn)
     end)
 
     local function refSaveTool()
@@ -551,7 +597,7 @@ function BuildsModule.init(ENV)
 
     SaveUI.BtnPlaceZone.MouseButton1Click:Connect(function()
         useCZ=true; refPlaceBtns()
-        local z=closestZone(myRefPos()); if z then placePosV=z.Position+Vector3.new(0,z.Size.Y/2+1,0) elseif myBaseCF then placePosV=myBaseCF.Position end
+        local z=myZone(); if z then placePosV=z.Position+Vector3.new(0,z.Size.Y/2+1,0) elseif myBaseCF then placePosV=myBaseCF.Position end
         placeRot=CFrame.identity; renderSavePrev()
     end)
 
@@ -572,8 +618,9 @@ function BuildsModule.init(ENV)
 
     LP:GetPropertyChangedSignal("Team"):Connect(function()
         task.wait(0.5)
+        _myZoneCache = nil  -- el equipo cambió: recalcular myZone()
         if not PageSave.Visible then return end
-        local z=closestZone(myRefPos())
+        local z=myZone()
         if z then
             placePosV = z.Position + Vector3.new(0, z.Size.Y/2+1, 0)
             useCZ=true; refPlaceBtns(); renderSavePrev()
@@ -607,8 +654,8 @@ function BuildsModule.init(ENV)
                         if useB.Parent then useB.Text="Usar"; useB.BackgroundColor3=T.purple; useB.TextColor3=T.text end
                     end)
                     selSaveIdx=idx; placeScale=1; placeRot=CFrame.identity; SaveUI.scaleLbl.Text="1.0x"
-                    local z=closestZone(myRefPos()); if z then placePosV=z.Position+Vector3.new(0,z.Size.Y/2+1,0) else placePosV=myRefPos() end
-                    renderSaveList(); renderSavePrev()
+                    local z=myZone(); if z then placePosV=z.Position+Vector3.new(0,z.Size.Y/2+1,0) else placePosV=myRefPos() end
+                    renderSaveList(); setSavePrev(true)
                 end)
                 delB.MouseButton1Click:Connect(function()
                     local idx = row.LayoutOrder
@@ -697,26 +744,9 @@ function BuildsModule.init(ENV)
         end
     end
 
-    -- ── findPlayerZone: zona robusta con los nombres exactos de workspace ──
-    -- Nombres de zonas pasados por el usuario. Sólo filtra X/Z: copia TODO
-    -- lo que está arriba y abajo, sin límite de altura.
-    local ZONE_NAMES = {
-        "MagentaZone", "New YellerZone", "Really blueZone",
-        "Really redZone", "WhiteZone", "CamoZone", "BlackZone",
-    }
-    local function findZoneByName(name)
-        if not name then return nil end
-        -- FindFirstChild(name, true) = búsqueda recursiva: encuentra las zones
-        -- estén sueltas en Workspace o dentro de carpetas/modelos.
-        local z = game:GetService("Workspace"):FindFirstChild(name, true)
-        if z and z:IsA("BasePart") then return z end
-        return nil
-    end
-    local function zoneContainsXZ(zone, pos)
-        local localPos = zone.CFrame:ToObjectSpace(CFrame.new(pos)).Position
-        local half = zone.Size / 2
-        return math.abs(localPos.X) <= half.X and math.abs(localPos.Z) <= half.Z
-    end
+    -- ── findPlayerZone: zona del jugador que se captura ──
+    -- (ZONE_NAMES / findZoneByName / zoneContainsXZ están definidos arriba,
+    --  junto a myZone). Sólo filtra X/Z: copia TODO lo arriba y abajo.
     local function findPlayerZone(pos)
         -- 1) closestZone del ENV, pero SOLO si la posición está realmente dentro
         local z = closestZone(pos)
@@ -741,7 +771,11 @@ function BuildsModule.init(ENV)
             return
         end
 
-        if copyScope == "zone" and data and data.Block then
+        do
+            -- Detectar zona origen SIEMPRE (incluso con copyScope == "all"):
+            -- SrcZoneName permite que zoneDeltaRot(src, myZone) rote el build
+            -- hacia el mar de MI zona al colocarlo. Sin esto, la rotación no
+            -- se adapta y el build aparece "rotado a otro lado".
             local p = Players:FindFirstChild(selPlayer)
             local pZone = nil
             local refPos = nil
@@ -752,31 +786,33 @@ function BuildsModule.init(ENV)
             end
             if refPos then pZone = findPlayerZone(refPos) end
 
-            if pZone then
-                local newBlocks = {}
-                local zoneCF = pZone.CFrame
-                local zonePos = zoneCF.Position
-                local halfSize = pZone.Size / 2
-                for _, pd in ipairs(data.Block) do
-                    local relPos = Vector3.new(pd.RelX or 0, pd.RelY or 0, pd.RelZ or 0)
-                    -- absPos = posición mundo del bloque
-                    local absPos = (base * CFrame.new(relPos)).Position
-                    local offset = absPos - zonePos
-                    -- Proyectar sobre los ejes X/Z locales de la zona (soporta rotación)
-                    local localX = offset:Dot(zoneCF.XVector)
-                    local localZ = offset:Dot(zoneCF.ZVector)
-                    -- Sin filtro Y: copia TODO lo arriba y abajo sin importar la altura
-                    if math.abs(localX) <= halfSize.X and math.abs(localZ) <= halfSize.Z then
-                        table.insert(newBlocks, pd)
+            if pZone and data then
+                -- Filtrar bloques por X/Z de la zona sólo si copyScope == "zone"
+                if copyScope == "zone" and data.Block then
+                    local newBlocks = {}
+                    local zoneCF = pZone.CFrame
+                    local zonePos = zoneCF.Position
+                    local halfSize = pZone.Size / 2
+                    for _, pd in ipairs(data.Block) do
+                        local relPos = Vector3.new(pd.RelX or 0, pd.RelY or 0, pd.RelZ or 0)
+                        local absPos = (base * CFrame.new(relPos)).Position
+                        local offset = absPos - zonePos
+                        local localX = offset:Dot(zoneCF.XVector)
+                        local localZ = offset:Dot(zoneCF.ZVector)
+                        -- Sin filtro Y: copia TODO lo arriba y abajo
+                        if math.abs(localX) <= halfSize.X and math.abs(localZ) <= halfSize.Z then
+                            table.insert(newBlocks, pd)
+                        end
+                    end
+                    -- Safety: si el filtro descartó todo pero había bloques,
+                    -- conservarlos todos (evita "0 bloques")
+                    if #newBlocks > 0 or #data.Block == 0 then
+                        data.Block = newBlocks
+                        cnt = #newBlocks
                     end
                 end
-                -- Safety: si el filtro descartó todo pero había bloques, conservarlos
-                -- todos (evita "0 bloques" por un desajuste de coordenadas)
-                if #newBlocks > 0 or #data.Block == 0 then
-                    data.Block = newBlocks
-                    data.SrcZoneName = pZone.Name
-                    cnt = #newBlocks
-                end
+                -- Registrar SIEMPRE la zona origen (para el delta de rotación)
+                data.SrcZoneName = pZone.Name
             end
         end
 
@@ -805,6 +841,7 @@ function BuildsModule.init(ENV)
         local sTool2=getTool("ScalingTool"); local pTool2=getTool("PaintingTool")
         task.spawn(function()
             saveBuildState.running=true; saveBuildState.cancel=false; gbRunningRef.value=true
+            setSavePrev(false)  -- ocultar preview durante la autoconstrucción
             SaveUI.btnBuildSaved.Text="CANCELAR"; SaveUI.btnBuildSaved.BackgroundColor3=T.danger; SaveUI.btnBuildSaved.Active=true
             local ok2,err=pcall(function()
                 equipTool(bTool2); equipTool(sTool2); equipTool(pTool2)
@@ -862,6 +899,7 @@ function BuildsModule.init(ENV)
             if not ok2 then SaveUI.prevStatus.Text="error: "..tostring(err); SaveUI.prevStatus.TextColor3=T.danger end
             local hum2=LP.Character and LP.Character:FindFirstChild("Humanoid"); if hum2 then pcall(function() hum2:UnequipTools() end) end
             saveBuildState.running=false; saveBuildState.cancel=false; gbRunningRef.value=false
+            setSavePrev(true)  -- reactivar preview al terminar la autoconstrucción
             SaveUI.btnBuildSaved.Text="CONSTRUIR GUARDADO"; SaveUI.btnBuildSaved.BackgroundColor3=T.purple; SaveUI.btnBuildSaved.Active=true
         end)
     end)
