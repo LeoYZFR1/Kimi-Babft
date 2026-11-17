@@ -173,11 +173,17 @@ function BuildsModule.init(ENV)
     local _myZoneCache = nil
     local function myZone()
         if _myZoneCache and _myZoneCache.Parent then return _myZoneCache end
-        -- Zona asignada al jugador. Se CACHEA la primera zona válida (normalmente
-        -- la suya, donde está al abrir la herramienta) para que el preview NO lo
-        -- siga al moverse a otra zona; se invalida al cambiar de equipo.
-        -- Usa closestZone del ENV (lo mismo que ya funcionaba antes). closestZone
-        -- devuelve (best, bestD); nos quedamos con best.
+        -- Zona asignada al jugador POR EQUIPO: TeamColor.Name.."Zone".
+        -- Esto es lo que hace que al cambiar de equipo el preview pase a TU zona
+        -- nueva (rojo→blanco, etc.), no a la que estabas parado. pcall por si LP
+        -- no tiene Team aún o el ejecutor restringe FindFirstChild.
+        local team = LP and LP.Team
+        if team and team.TeamColor then
+            local zName = team.TeamColor.Name .. "Zone"
+            local ok, z = pcall(function() return workspace:FindFirstChild(zName, true) end)
+            if ok and z and z:IsA("BasePart") then _myZoneCache = z; return z end
+        end
+        -- Fallback: zona más cercana por posición (si no hay Team o no se halló).
         local z = closestZone(myRefPos())
         if z and z:IsA("BasePart") then _myZoneCache = z; return z end
         return nil
@@ -192,12 +198,25 @@ function BuildsModule.init(ENV)
         for _,pd in ipairs(sv.data.Block) do local p=Vector3.new(pd.RelX or 0,pd.RelY or 0,pd.RelZ or 0); minv=Vector3.new(math.min(minv.X,p.X),math.min(minv.Y,p.Y),math.min(minv.Z,p.Z)); maxv=Vector3.new(math.max(maxv.X,p.X),math.max(maxv.Y,p.Y),math.max(maxv.Z,p.Z)) end
         local c=(minv+maxv)/2; cCache[sv]=c; return c
     end
-    local _lastDelta={sv=nil,dst=nil,delta=CFrame.identity}
-    local function getSaveDelta(sv)
-        local mz=myZone(); local mzN=mz and mz.Name or"WhiteZone"
-        local sN=(sv and sv.data and sv.data.SrcZoneName) or"WhiteZone"
-        if _lastDelta.sv==sv and _lastDelta.dst==mzN then return _lastDelta.delta end
-        local delta=zoneDeltaRot(sN,mzN); _lastDelta={sv=sv,dst=mzN,delta=delta}; return delta
+    -- defaultCenter: posición WORLD donde debe quedar el CENTRO del build para
+    -- verlo "tal cual lo veía el del equipo origen" en MI zona:
+    --   myZone().CFrame * CFrame.new(buildCenter)  → misma pos/altura/rot LOCAL.
+    local function defaultCenter(sv)
+        local mz=myZone()
+        if mz then return (mz.CFrame * CFrame.new(buildCenter(sv))).Position end
+        return myRefPos()
+    end
+    -- blockWorldCF: fórmula ÚNICA para preview Y placement real.
+    --   world = CFrame.new(centerWorld) * destRot * placeRot * CFrame.new(off*scale) * relRot
+    --   destRot    = rotación de MI zona (alinea el build con la zona destino)
+    --   placeRot   = rotación extra del usuario (alrededor del centro, en local de zona)
+    --   off*scale  = offset del bloque vs el centro, escalado
+    --   relRot     = rotación PROPIA del bloque (local de zona origen = destino)
+    -- Preserva altura, posición y rotación exactas entre zonas (rojo→blanco etc.).
+    local function blockWorldCF(pd, center, centerWorld, destRot)
+        local relRot = CFrame.Angles(math.rad(pd.RotX or 0), math.rad(pd.RotY or 0), math.rad(pd.RotZ or 0))
+        local off = Vector3.new((pd.RelX or 0) - center.X, (pd.RelY or 0) - center.Y, (pd.RelZ or 0) - center.Z)
+        return CFrame.new(centerWorld) * destRot * placeRot * CFrame.new(off * placeScale) * relRot
     end
     local function curPlacePos()
         if placePosV then return placePosV end
@@ -246,16 +265,13 @@ function BuildsModule.init(ENV)
             saveDummy.Position=Vector3.new(0,-9999,0); saveArcAdornee.Position=Vector3.new(0,-9999,0)
             SaveHandles.Visible=false; SaveArc.Visible=false; return
         end
-        local pos=curPlacePos(); local delta=getSaveDelta(sv); local center=buildCenter(sv); local cAdj=delta*center
+        local pos=curPlacePos(); local center=buildCenter(sv); local mz=myZone(); local destRot=mz and (mz.CFrame-mz.CFrame.Position) or CFrame.identity
         local blocks=sv.data.Block; local n=0
         local minv=Vector3.new(math.huge,math.huge,math.huge); local maxv=Vector3.new(-math.huge,-math.huge,-math.huge)
         for _,pd in ipairs(blocks) do
             n=n+1; local p=savePool[n]
             if not p then p=mk("Part",savePrevF,{Anchored=true,CanCollide=false,CanQuery=false,CanTouch=false,CastShadow=false,Material=Enum.Material.Plastic}); savePool[n]=p end
-            local relPos=Vector3.new(pd.RelX,pd.RelY,pd.RelZ); local relRot=CFrame.Angles(math.rad(pd.RotX or 0),math.rad(pd.RotY or 0),math.rad(pd.RotZ or 0))
-            local rPA=delta*relPos; local rRA=(delta-delta.Position)*relRot
-            local offset=(rPA-cAdj)*placeScale; local rotOff=placeRot*offset
-            local bCF=CFrame.new(pos+rotOff)*placeRot*rRA; local bSz=Vector3.new(pd.SizeX or 2,pd.SizeY or 2,pd.SizeZ or 2)*placeScale
+            local bCF=blockWorldCF(pd, center, pos, destRot); local bSz=Vector3.new(pd.SizeX or 2,pd.SizeY or 2,pd.SizeZ or 2)*placeScale
             p.Size=bSz; p.CFrame=bCF
             p.Material = Enum.Material[pd.Material] or Enum.Material.Plastic
             p.Color=(pd.ColorR and Color3.new(pd.ColorR,pd.ColorG,pd.ColorB)) or T.purple
@@ -586,7 +602,7 @@ function BuildsModule.init(ENV)
 
     SaveUI.BtnPlaceZone.MouseButton1Click:Connect(function()
         useCZ=true; refPlaceBtns()
-        local z=myZone(); if z then placePosV=z.Position+Vector3.new(0,z.Size.Y/2+1,0) elseif myBaseCF then placePosV=myBaseCF.Position end
+        local sv=selSaveIdx and Saves[selSaveIdx]; placePosV=defaultCenter(sv)
         placeRot=CFrame.identity; renderSavePrev()
     end)
 
@@ -611,7 +627,8 @@ function BuildsModule.init(ENV)
         if not PageSave.Visible then return end
         local z=myZone()
         if z then
-            placePosV = z.Position + Vector3.new(0, z.Size.Y/2+1, 0)
+            local sv=selSaveIdx and Saves[selSaveIdx]
+            if sv then placePosV=defaultCenter(sv) end  -- reubicar al centro preservado en MI nueva zona
             useCZ=true; refPlaceBtns(); renderSavePrev()
         end
     end)
@@ -643,7 +660,7 @@ function BuildsModule.init(ENV)
                         if useB.Parent then useB.Text="Usar"; useB.BackgroundColor3=T.purple; useB.TextColor3=T.text end
                     end)
                     selSaveIdx=idx; placeScale=1; placeRot=CFrame.identity; SaveUI.scaleLbl.Text="1.0x"
-                    local z=myZone(); if z then placePosV=z.Position+Vector3.new(0,z.Size.Y/2+1,0) else placePosV=myRefPos() end
+                    placePosV=defaultCenter(Saves[idx])
                     renderSaveList(); setSavePrev(true)
                 end)
                 delB.MouseButton1Click:Connect(function()
@@ -836,7 +853,7 @@ function BuildsModule.init(ENV)
                 equipTool(bTool2); equipTool(sTool2); equipTool(pTool2)
                 local bRF2=bTool2:FindFirstChild("RF"); local sRF2=sTool2 and sTool2:FindFirstChild("RF"); local pRF2=pTool2 and pTool2:FindFirstChild("RF")
                 if not bRF2 then error("BuildingTool sin RF") end
-                local pos=curPlacePos(); local delta=getSaveDelta(sv); local center=buildCenter(sv); local cAdj=delta*center
+                local pos=curPlacePos(); local center=buildCenter(sv); local mz=myZone(); local destRot=mz and (mz.CFrame-mz.CFrame.Position) or CFrame.identity
 
                 local targetName = isShareModeOn and selPlayer or LP.Name
                 local folder2 = userFolder(targetName)
@@ -856,9 +873,7 @@ function BuildsModule.init(ENV)
 
                     if not isShareModeOn and (not inv or invVal <= 0) then return end
 
-                    local rP=Vector3.new(pd.RelX,pd.RelY,pd.RelZ); local rR=CFrame.Angles(math.rad(pd.RotX or 0),math.rad(pd.RotY or 0),math.rad(pd.RotZ or 0))
-                    local rPA=delta*rP; local rRA=(delta-delta.Position)*rR; local offset=(rPA-cAdj)*placeScale; local rotOff=placeRot*offset
-                    local world=CFrame.new(pos+rotOff)*placeRot*rRA
+                    local world=blockWorldCF(pd, center, pos, destRot)
 
                     if not folder2 or folder2.Parent==nil then
                         folder2 = userFolder(targetName)
@@ -2067,7 +2082,6 @@ function BuildsModule.init(ENV)
             editApplyBtn.Text = "Aplicar"
             editApplyBtn.Active = true
             cCache[sv] = nil
-            _lastDelta = {sv=nil, dst=nil, delta=CFrame.identity}
             renderSavePrev()
             renderSaveList()
         end)
@@ -2095,7 +2109,6 @@ function BuildsModule.init(ENV)
         local snapshot = table.remove(editUndoStack, foundIdx)
         sv.data.Block = snapshot.blocks
         cCache[sv] = nil
-        _lastDelta = {sv=nil, dst=nil, delta=CFrame.identity}
         renderSavePrev()
         renderSaveList()
         editStatusLbl.Text = "↩ Deshecho"
