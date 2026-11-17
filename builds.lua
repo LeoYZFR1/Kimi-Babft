@@ -183,12 +183,20 @@ function BuildsModule.init(ENV)
     local _myZoneCache = nil
     local function myZone()
         if _myZoneCache and _myZoneCache.Parent then return _myZoneCache end
-        local team = LP.Team
+        -- 1) Por TeamColor (zona asignada al jugador). Pcall: si el entorno no
+        --    permite FindFirstChild sobre Workspace o LP no tiene Team, cae al
+        --    fallback sin tronar el preview. El resultado se CACHEA → el preview
+        --    NO sigue al jugador cuando se mueve a otra zona; se invalida al
+        --    cambiar de equipo.
+        local team = LP and LP.Team
         if team and team.TeamColor then
-            local z = findZoneByName(team.TeamColor.Name .. "Zone")
-            if z then _myZoneCache = z; return z end
+            local ok, z = pcall(function()
+                return game:GetService("Workspace"):FindFirstChild(team.TeamColor.Name .. "Zone", true)
+            end)
+            if ok and z and z:IsA("BasePart") then _myZoneCache = z; return z end
         end
-        -- Fallback: zona actual (sólo si no hay match por team)
+        -- 2) Fallback seguro: closestZone del ENV (no toca Workspace directo,
+        --    igual que el resto del archivo; comportamiento previo probado).
         local z = closestZone(myRefPos())
         if z and z:IsA("BasePart") then _myZoneCache = z; return z end
         return nil
