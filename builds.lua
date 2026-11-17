@@ -167,26 +167,31 @@ function BuildsModule.init(ENV)
         local half = zone.Size / 2
         return math.abs(localPos.X) <= half.X and math.abs(localPos.Z) <= half.Z
     end
-    -- myZone: la zona ASIGNADA al jugador local (por TeamColor), NO la zona donde
-    -- está parado ahora. El preview y el delta de rotación SIEMPRE usan esta,
-    -- así el build aparece en mi zona y orientado hacia mi mar.
+    -- teamZone: zona ASIGNADA a CUALQUIER jugador por TeamColor (TeamColor.Name.."Zone"),
+    -- NO la zona donde está parado. Estable: no cambia al conducir ni al acercarse a
+    -- otra zona. pcall por si el ejecutor restringe FindFirstChild. nil si no hay Team.
+    local function teamZone(player)
+        if not player then return nil end
+        local team = player.Team
+        if not team or not team.TeamColor then return nil end
+        local zName = team.TeamColor.Name .. "Zone"
+        local ok, z = pcall(function() return workspace:FindFirstChild(zName, true) end)
+        if ok and z and z:IsA("BasePart") then return z end
+        return nil
+    end
+    -- myZone: la zona ASIGNADA al jugador LOCAL (vía teamZone), NO la zona donde
+    -- está parado ahora. El preview/placement SIEMPRE usan esta, así el build
+    -- aparece en mi zona y orientado hacia mi mar.
     local _myZoneCache = nil
     local function myZone()
         if _myZoneCache and _myZoneCache.Parent then return _myZoneCache end
-        -- Zona asignada al jugador POR EQUIPO: TeamColor.Name.."Zone".
-        -- Esto es lo que hace que al cambiar de equipo el preview pase a TU zona
-        -- nueva (rojo→blanco, etc.), no a la que estabas parado. pcall por si LP
-        -- no tiene Team aún o el ejecutor restringe FindFirstChild.
-        local team = LP and LP.Team
-        if team and team.TeamColor then
-            local zName = team.TeamColor.Name .. "Zone"
-            local ok, z = pcall(function() return workspace:FindFirstChild(zName, true) end)
-            if ok and z and z:IsA("BasePart") then _myZoneCache = z; return z end
+        local z = teamZone(LP)
+        if not z then
+            local cz = closestZone(myRefPos())
+            if cz and cz:IsA("BasePart") then z = cz end
         end
-        -- Fallback: zona más cercana por posición (si no hay Team o no se halló).
-        local z = closestZone(myRefPos())
-        if z and z:IsA("BasePart") then _myZoneCache = z; return z end
-        return nil
+        if z then _myZoneCache = z end
+        return z
     end
 
     -- findPlayerZone se define más abajo (~756); forward-decl para que countFor
@@ -200,8 +205,13 @@ function BuildsModule.init(ENV)
         if copyScope ~= "zone" then return countPB(un) end
         local uf = userFolder(un); if not uf then return 0 end
         local p = Players:FindFirstChild(un)
-        local hrp = p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-        local zone = hrp and findPlayerZone(hrp.Position)
+        -- Zona por EQUIPO del jugador (estable; no cambia al acercarse a otra zona
+        -- ni al conducir fuera). Fallback posicional sólo si no tiene Team/equipo.
+        local zone = p and teamZone(p)
+        if not zone then
+            local hrp = p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+            zone = hrp and findPlayerZone(hrp.Position)
+        end
         if not zone then return countPB(un) end
         local zPos = zone.Position; local zCF = zone.CFrame; local half = zone.Size/2
         local c = 0
@@ -824,31 +834,40 @@ function BuildsModule.init(ENV)
         end
 
         do
-            -- Detectar zona origen SIEMPRE (incluso con copyScope == "all"):
-            -- SrcZoneName permite que zoneDeltaRot(src, myZone) rote el build
-            -- hacia el mar de MI zona al colocarlo. Sin esto, la rotación no
-            -- se adapta y el build aparece "rotado a otro lado".
+            -- Zona del EQUIPO del jugador que se captura (estable; NO depende de
+            -- dónde conduce ni de a qué zona se acerque). Fallback posicional sólo
+            -- si no tiene Team/equipo todavía.
             local p = Players:FindFirstChild(selPlayer)
-            local pZone = nil
-            local refPos = nil
-            if p and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-                refPos = p.Character.HumanoidRootPart.Position
-            elseif selPlayer == LP.Name and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
-                refPos = LP.Character.HumanoidRootPart.Position
+            if not p and selPlayer == LP.Name then p = LP end
+            local pZone = p and teamZone(p) or nil
+            if not pZone then
+                local refPos = nil
+                if p and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                    refPos = p.Character.HumanoidRootPart.Position
+                elseif selPlayer == LP.Name and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+                    refPos = LP.Character.HumanoidRootPart.Position
+                end
+                if refPos then pZone = findPlayerZone(refPos) end
             end
-            if refPos then pZone = findPlayerZone(refPos) end
+            -- srcZone = zona que captureBuild usó para los RelX/RelZ (data.SrcZoneName
+            -- lo puso captureBuild). Sirve para reconstruir la posición WORLD de cada
+            -- bloque (= srcZone.CFrame * RelXYZ, inverso exacto de lo que hizo captureBuild).
+            local srcZone = data and data.SrcZoneName and findZoneByName(data.SrcZoneName)
+            local srcCF = srcZone and srcZone.CFrame or base
 
             if pZone and data then
-                -- Filtrar bloques por X/Z de la zona sólo si copyScope == "zone"
+                -- Filtrar bloques por X/Z de la zona del equipo sólo si copyScope == "zone".
+                -- Se reconstruye la posición WORLD de cada bloque y se chequea contra pZone
+                -- (la zona del equipo). Así funciona aunque el jugador conduzca fuera de su
+                -- zona: los bloques que están en su zona del equipo se copian, los de fuera
+                -- se descartan. Sin filtro Y: copia TODO lo arriba y abajo.
                 if copyScope == "zone" and data.Block then
                     local newBlocks = {}
-                    local halfSize = pZone.Size / 2
-                    -- RelX/RelZ ya están en el espacio LOCAL de la zona origen
-                    -- (captureBuild los guardó relativos al CFrame de pZone), así
-                    -- que el chequeo es directo: |RelX|<=half.X y |RelZ|<=half.Z.
-                    -- Sin filtro Y: copia TODO lo arriba y abajo.
+                    local tPos = pZone.Position; local tCF = pZone.CFrame; local tHalf = pZone.Size/2
                     for _, pd in ipairs(data.Block) do
-                        if math.abs(pd.RelX or 0) <= halfSize.X and math.abs(pd.RelZ or 0) <= halfSize.Z then
+                        local worldPos = (srcCF * CFrame.new(pd.RelX or 0, pd.RelY or 0, pd.RelZ or 0)).Position
+                        local off = worldPos - tPos
+                        if math.abs(off:Dot(tCF.XVector)) <= tHalf.X and math.abs(off:Dot(tCF.ZVector)) <= tHalf.Z then
                             table.insert(newBlocks, pd)
                         end
                     end
